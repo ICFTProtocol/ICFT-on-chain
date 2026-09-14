@@ -25,13 +25,31 @@ contract UpgradeICFTModule is Script {
     function run() external returns (address newImplementation) {
         uint256 deployerPrivateKey = vm.envUint("DEPLOYER_PRIVATE_KEY");
         UpgradeConfig memory config = _loadConfig();
+        bool isLendingPool = keccak256(bytes(config.module)) == keccak256("LendingPool");
+        bool hasPostUpgradeCall = config.initCalldata.length != 0;
 
         vm.startBroadcast(deployerPrivateKey);
 
+        // ProxyAdmin is the caller of upgradeAndCall, so role-gated migrations must
+        // be invoked by the broadcaster after the implementation switch instead.
+        // Pausing LendingPool keeps that multi-transaction sequence atomic in practice.
+        if (isLendingPool && hasPostUpgradeCall) {
+            LendingPool(payable(config.proxy)).pause();
+        }
+
         newImplementation = _deployImplementation(config.module);
         ProxyAdmin(config.proxyAdmin).upgradeAndCall(
-            ITransparentUpgradeableProxy(payable(config.proxy)), newImplementation, config.initCalldata
+            ITransparentUpgradeableProxy(payable(config.proxy)), newImplementation, bytes("")
         );
+
+        if (hasPostUpgradeCall) {
+            (bool success, bytes memory returndata) = config.proxy.call(config.initCalldata);
+            if (!success) _revertWith(returndata);
+        }
+
+        if (isLendingPool && hasPostUpgradeCall) {
+            LendingPool(payable(config.proxy)).unpause();
+        }
 
         vm.stopBroadcast();
 
@@ -41,6 +59,12 @@ contract UpgradeICFTModule is Script {
         console2.log("proxy", config.proxy);
         console2.log("newImplementation", newImplementation);
         console2.log("initCalldataLength", config.initCalldata.length);
+    }
+
+    function _revertWith(bytes memory returndata) private pure {
+        assembly ("memory-safe") {
+            revert(add(returndata, 0x20), mload(returndata))
+        }
     }
 
     function _loadConfig() internal view returns (UpgradeConfig memory config) {

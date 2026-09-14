@@ -36,7 +36,9 @@ Optional:
 - `UPGRADE_CALLDATA`
 
 Use `UPGRADE_CALLDATA` only when the new implementation adds a post-upgrade initializer or migration function.
-If not needed, leave it empty.
+If not needed, leave it empty. The script executes this calldata from the broadcaster after the proxy
+implementation is upgraded; it must not be executed by `ProxyAdmin`, because `ProxyAdmin` does not hold
+the protocol's operational roles.
 
 ## Dry Run
 
@@ -112,7 +114,10 @@ an insurance reserve, minimum borrow enforcement, and LP-vault integration.
 
 It must be upgraded only while `totalScaledDebtUSD` and `totalBorrowedICFT` are both zero. This is intentional:
 legacy borrower positions cannot be enumerated or safely migrated on-chain. After upgrading LendingPool,
-call `initializeAuditAccountingV3()` through `UPGRADE_CALLDATA`; it rejects a migration with live legacy debt.
+set `UPGRADE_CALLDATA` to `0xde954445` (`initializeAuditAccountingV3()`); it rejects a migration with live
+legacy debt. The upgrade script pauses LendingPool, upgrades it without proxy-admin calldata, invokes this
+migration from the broadcaster, then unpauses it. The broadcaster must therefore hold both `PAUSER_ROLE`
+and `CONFIG_ADMIN_ROLE` on LendingPool.
 
 Only after that initialization succeeds may the team deploy the LP vault:
 
