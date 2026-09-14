@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-pragma solidity ^0.8.20;
+pragma solidity 0.8.30;
 
 import {AggregatorV3Interface} from "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
 
@@ -18,6 +18,10 @@ contract MockChainlinkFeed is AggregatorV3Interface {
         _answer = answer_;
         _updatedAt = updatedAt_;
         _roundId += 1;
+    }
+
+    function setRoundId(uint80 roundId_) external {
+        _roundId = roundId_;
     }
 
     function decimals() external view returns (uint8) {

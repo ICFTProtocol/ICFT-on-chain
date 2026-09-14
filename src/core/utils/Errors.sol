@@ -21,7 +21,7 @@
  * You should have received a copy of the GNU General Public License
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
-pragma solidity ^0.8.20;
+pragma solidity 0.8.30;
 
 /// @notice Thrown when a zero address or otherwise invalid address is provided.
 error InvalidAddress();
@@ -35,6 +35,27 @@ error InvalidAmount();
 /// @notice Thrown when a zero amount is provided where a positive amount is required.
 error ZeroAmount();
 
+/// @notice Thrown when an ERC20 collateral transfer delivers no tokens to the pool.
+error ZeroCollateralReceived();
+
+/// @notice Thrown when a configured basis-point value exceeds the protocol maximum.
+error InvalidBps();
+
+/// @notice Thrown when a new loan is below the configured minimum USD value.
+error BorrowBelowMinimum();
+
+/// @notice Thrown when LP shares cannot be priced because the pool has no assets.
+error NoLiquidityAssets();
+
+/// @notice Thrown when LP vault bootstrap is attempted more than once.
+error LiquidityVaultAlreadyBootstrapped();
+
+/// @notice Thrown when an accounting migration would require enumerating active legacy positions.
+error MigrationRequiresZeroDebt();
+
+/// @notice Thrown when the collateral registry reaches its bounded asset capacity.
+error CollateralAssetLimitReached();
+
 /// @notice Thrown when fixed token allocations do not add up to the expected total supply.
 error InvalidTokenAllocation();
 
@@ -43,6 +64,9 @@ error InvalidOracleAddress();
 
 /// @notice Thrown when an oracle answer is zero, negative, or otherwise unusable.
 error InvalidOracleAnswer();
+
+/// @notice Thrown when a Chainlink response does not represent a completed current round.
+error IncompleteOracleRound();
 
 /// @notice Thrown when the oracle price is older than the configured freshness window.
 error StaleOraclePrice();

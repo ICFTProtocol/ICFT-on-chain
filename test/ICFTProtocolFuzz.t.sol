@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-pragma solidity ^0.8.20;
+pragma solidity 0.8.30;
 
 import {ProtocolFixture} from "./helpers/ProtocolFixture.sol";
 import {LendingPool} from "../src/core/ICFT/lending/LendingPool.sol";
@@ -9,6 +9,8 @@ import {BorrowExceedsLTV} from "../src/core/utils/Errors.sol";
 contract ICFTProtocolFuzzTest is ProtocolFixture {
     function setUp() public {
         _setUpProtocol();
+        // Exercise arithmetic over the full input domain; minimum-size policy is unit-tested separately.
+        lendingPool.setMinimumBorrowUSD(1);
     }
 
     function testFuzzBorrowDoesNotExceedMaxLtv(uint96 collateralEth, uint96 borrowIcft) public {

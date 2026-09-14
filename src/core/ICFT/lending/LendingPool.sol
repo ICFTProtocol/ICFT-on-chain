@@ -86,7 +86,7 @@
 //                                  inYLnt;.......................................:tjLCvl
 //                                      ;tJmCUx,..............................TUJmLTi.
 //                                           .tXYQqqLnT!t!Ii;;::;iIl!!tjUmmLYXj,
-pragma solidity ^0.8.20;
+pragma solidity 0.8.30;
 
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
@@ -102,16 +102,21 @@ import {IPriceOracle} from "../../interfaces/IPriceOracle.sol";
 import {IRiskEngine} from "../../interfaces/IRiskEngine.sol";
 import {
     BorrowExceedsLTV,
+    BorrowBelowMinimum,
     BorrowingDisabledAtUtilization,
+    CollateralAssetLimitReached,
     DirectETHTransfersDisabled,
     InsufficientCollateral,
     InsufficientLiquidity,
     InvalidAddress,
+    InvalidBps,
+    MigrationRequiresZeroDebt,
     NoDebt,
     NothingToRepay,
     NotLiquidatable,
     SlippageExceeded,
     UnsupportedCollateralAsset,
+    ZeroCollateralReceived,
     ZeroAmount
 } from "../../utils/Errors.sol";
 
@@ -133,10 +138,14 @@ contract LendingPool is Initializable, ILendingPool, AccessControlUpgradeable, P
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
     bytes32 public constant CONFIG_ADMIN_ROLE = keccak256("CONFIG_ADMIN_ROLE");
     bytes32 public constant LIQUIDATION_BOT_ROLE = keccak256("LIQUIDATION_BOT_ROLE");
+    bytes32 public constant LP_VAULT_ROLE = keccak256("LP_VAULT_ROLE");
 
     uint256 public constant BPS = 10_000;
     uint256 public constant YEAR = 365 days;
     uint256 public constant INDEX_SCALE = 1e18;
+    uint256 public constant DEFAULT_INSURANCE_RESERVE_BPS = 1_500;
+    uint256 public constant DEFAULT_MIN_BORROW_USD = 100e18;
+    uint256 public constant MAX_COLLATERAL_ASSETS = 16;
     address internal constant NATIVE_ASSET = address(0);
 
     struct LiquidationSettlement {
@@ -177,6 +186,14 @@ contract LendingPool is Initializable, ILendingPool, AccessControlUpgradeable, P
     mapping(address => CollateralAsset) internal collateralAssets;
     mapping(address => bool) internal collateralAssetKnown;
     address[] internal supportedCollateralAssets;
+
+    // Appended after the legacy layout to exclude paused intervals from interest accrual.
+    uint256 public pausedAt;
+    uint256 public insuranceReserveBps;
+    uint256 public minimumBorrowUSD;
+    uint256 public totalBadDebtUSD;
+    mapping(address => uint256) public issuedPrincipalICFT;
+    uint256[43] private __gap;
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -219,6 +236,8 @@ contract LendingPool is Initializable, ILendingPool, AccessControlUpgradeable, P
         fundALiquidityICFT = fundAAllocation_;
         borrowIndex = INDEX_SCALE;
         lastAccrualTime = block.timestamp;
+        insuranceReserveBps = DEFAULT_INSURANCE_RESERVE_BPS;
+        minimumBorrowUSD = DEFAULT_MIN_BORROW_USD;
 
         _setCollateralAsset(NATIVE_ASSET, true, true);
     }
@@ -227,6 +246,15 @@ contract LendingPool is Initializable, ILendingPool, AccessControlUpgradeable, P
         if (!_isKnownCollateralAsset(NATIVE_ASSET)) {
             _setCollateralAsset(NATIVE_ASSET, true, true);
         }
+    }
+
+    /// @notice Initializes audit-remediation accounting on an existing proxy with no live debt.
+    /// @dev Existing positions cannot be enumerated on-chain, so upgrades with active legacy debt are intentionally rejected.
+    function initializeAuditAccountingV3() external reinitializer(3) onlyRole(CONFIG_ADMIN_ROLE) {
+        if (totalScaledDebtUSD != 0 || totalBorrowedICFT != 0) revert MigrationRequiresZeroDebt();
+
+        insuranceReserveBps = DEFAULT_INSURANCE_RESERVE_BPS;
+        minimumBorrowUSD = DEFAULT_MIN_BORROW_USD;
     }
 
     receive() external payable {
@@ -257,12 +285,16 @@ contract LendingPool is Initializable, ILendingPool, AccessControlUpgradeable, P
         Position storage position = positions[msg.sender];
         _syncPosition(position, msg.sender);
 
+        uint256 balanceBefore = IERC20(asset).balanceOf(address(this));
         IERC20(asset).safeTransferFrom(msg.sender, address(this), amount);
-        erc20CollateralBalances[msg.sender][asset] += amount;
+        uint256 received = IERC20(asset).balanceOf(address(this)) - balanceBefore;
+        if (received == 0) revert ZeroCollateralReceived();
+
+        erc20CollateralBalances[msg.sender][asset] += received;
         position.lastAccrualIndex = borrowIndex;
         position.active = true;
 
-        emit DepositCollateral(msg.sender, asset, amount, erc20CollateralBalances[msg.sender][asset]);
+        emit DepositCollateral(msg.sender, asset, received, erc20CollateralBalances[msg.sender][asset]);
     }
 
     function withdrawCollateral(uint256 amountETH) external nonReentrant whenNotPaused {
@@ -289,6 +321,7 @@ contract LendingPool is Initializable, ILendingPool, AccessControlUpgradeable, P
         }
 
         uint256 addedDebtUSD = priceOracle.convertICFTToUSD(amountICFT);
+        if (addedDebtUSD < minimumBorrowUSD) revert BorrowBelowMinimum();
         uint256 newDebtUSD = currentDebtUSD + addedDebtUSD;
         uint256 collateralValueUSD = _getCollateralValueUSD(msg.sender, position);
         uint256 newLtv = riskEngine.calculateLTV(collateralValueUSD, newDebtUSD);
@@ -302,6 +335,7 @@ contract LendingPool is Initializable, ILendingPool, AccessControlUpgradeable, P
 
         totalPrincipalDebtUSD += addedDebtUSD;
         totalScaledDebtUSD += scaledIncrease;
+        issuedPrincipalICFT[msg.sender] += amountICFT;
         fundALiquidityICFT -= amountICFT;
         totalBorrowedICFT += amountICFT;
 
@@ -338,9 +372,7 @@ contract LendingPool is Initializable, ILendingPool, AccessControlUpgradeable, P
 
         _reduceDebt(position, totalDebtUSD, repaidDebtUSD, repaidPrincipalUSD, msg.sender);
 
-        fundALiquidityICFT += returnedPrincipalICFT;
-        protocolRevenueICFT += returnedRevenueICFT;
-        totalBorrowedICFT = _saturatingSub(totalBorrowedICFT, returnedPrincipalICFT);
+        _applyReturnedFunds(returnedPrincipalICFT, returnedRevenueICFT);
 
         _emitFundAAccountingUpdate();
         emit Repay(msg.sender, actualICFT, repaidDebtUSD, getDebt(msg.sender));
@@ -377,11 +409,8 @@ contract LendingPool is Initializable, ILendingPool, AccessControlUpgradeable, P
         _reduceDebt(position, totalDebtUSD, settlement.debtToCoverUSD, debtSettlement.repaidPrincipalUSD, user);
         _decreaseCollateral(user, position, collateralAsset, settlement.collateralToSeizeAmount);
 
-        fundALiquidityICFT += debtSettlement.returnedPrincipalICFT;
-        protocolRevenueICFT += debtSettlement.returnedRevenueICFT;
-        totalBorrowedICFT = _saturatingSub(totalBorrowedICFT, debtSettlement.returnedPrincipalICFT);
-
-        _transferCollateral(collateralAsset, collateralRecipient, settlement.collateralToSeizeAmount);
+        _applyReturnedFunds(debtSettlement.returnedPrincipalICFT, debtSettlement.returnedRevenueICFT);
+        _writeOffBadDebtIfNeeded(user, position);
 
         _emitFundAAccountingUpdate();
         emit Liquidation(
@@ -394,19 +423,67 @@ contract LendingPool is Initializable, ILendingPool, AccessControlUpgradeable, P
             settlement.collateralValueSeizedUSD,
             settlement.resultingLtvBps
         );
+
+        // All state effects and logs are finalized before handing collateral to an external recipient.
+        _transferCollateral(collateralAsset, collateralRecipient, settlement.collateralToSeizeAmount);
     }
 
     function pause() external onlyRole(PAUSER_ROLE) {
+        _accrueGlobalInterest();
+        pausedAt = block.timestamp;
         _pause();
     }
 
     function unpause() external onlyRole(PAUSER_ROLE) {
+        // Interest was settled immediately before the pause; frozen time is not chargeable.
+        lastAccrualTime = block.timestamp;
+        pausedAt = 0;
         _unpause();
     }
 
     function setLiquidityBuffer(uint256 newLiquidityBuffer) external onlyRole(CONFIG_ADMIN_ROLE) {
         liquidityBuffer = newLiquidityBuffer;
         emit ParameterUpdated(keccak256("liquidityBuffer"), newLiquidityBuffer);
+    }
+
+    /// @notice Sets the portion of interest retained as insurance reserve, in basis points.
+    function setInsuranceReserveBps(uint256 newInsuranceReserveBps) external onlyRole(CONFIG_ADMIN_ROLE) {
+        if (newInsuranceReserveBps > BPS) revert InvalidBps();
+
+        insuranceReserveBps = newInsuranceReserveBps;
+        emit ParameterUpdated(keccak256("insuranceReserveBps"), newInsuranceReserveBps);
+    }
+
+    /// @notice Sets the minimum USD value accepted for new borrow positions.
+    function setMinimumBorrowUSD(uint256 newMinimumBorrowUSD) external onlyRole(CONFIG_ADMIN_ROLE) {
+        if (newMinimumBorrowUSD == 0) revert ZeroAmount();
+
+        minimumBorrowUSD = newMinimumBorrowUSD;
+        emit ParameterUpdated(keccak256("minimumBorrowUSD"), newMinimumBorrowUSD);
+    }
+
+    /// @notice Pulls ICFT supplied by the authorized LP vault into lendable pool liquidity.
+    function supplyLiquidity(uint256 amount) external nonReentrant onlyRole(LP_VAULT_ROLE) {
+        if (amount == 0) revert ZeroAmount();
+
+        icft.safeTransferFrom(msg.sender, address(this), amount);
+        fundAAllocation += amount;
+        fundALiquidityICFT += amount;
+
+        _emitFundAAccountingUpdate();
+    }
+
+    /// @notice Sends idle ICFT liquidity to the authorized LP vault for redeemed LP shares.
+    function withdrawLiquidity(address recipient, uint256 amount) external nonReentrant onlyRole(LP_VAULT_ROLE) {
+        if (recipient == address(0)) revert InvalidAddress();
+        if (amount == 0) revert ZeroAmount();
+        if (amount > getAvailableLiquidity()) revert InsufficientLiquidity();
+
+        fundAAllocation -= amount;
+        fundALiquidityICFT -= amount;
+        icft.safeTransfer(recipient, amount);
+
+        _emitFundAAccountingUpdate();
     }
 
     function setCollateralAsset(address asset, bool enabled) external onlyRole(CONFIG_ADMIN_ROLE) {
@@ -499,6 +576,17 @@ contract LendingPool is Initializable, ILendingPool, AccessControlUpgradeable, P
         return principalInventory - liquidityBuffer;
     }
 
+    /// @notice Returns the ICFT value owned by LP shares.
+    /// @dev Reserve ICFT is excluded because it is earmarked for bad-debt coverage before LP losses are socialized.
+    function getLPTotalAssets() public view returns (uint256 totalAssetsICFT) {
+        uint256 idleAssetsICFT = getSpendablePrincipalBalance();
+        uint256 outstandingDebtICFT = priceOracle.convertUSDToICFT(
+            _debtFromScaled(totalScaledDebtUSD, _previewBorrowIndex()), false
+        );
+
+        return idleAssetsICFT + outstandingDebtICFT;
+    }
+
     function getSpendablePrincipalBalance() public view returns (uint256 spendablePrincipalICFT) {
         uint256 rawBalance = icft.balanceOf(address(this));
         return _saturatingSub(rawBalance, protocolRevenueICFT);
@@ -544,6 +632,10 @@ contract LendingPool is Initializable, ILendingPool, AccessControlUpgradeable, P
     }
 
     function _accrueGlobalInterest() internal {
+        if (paused()) {
+            return;
+        }
+
         uint256 previousAccrualTime = lastAccrualTime;
         if (block.timestamp <= previousAccrualTime) {
             return;
@@ -599,8 +691,16 @@ contract LendingPool is Initializable, ILendingPool, AccessControlUpgradeable, P
         }
 
         if (repaidPrincipalUSD > 0) {
+            uint256 principalDebtBeforeUSD = position.principalDebtUSD;
+            uint256 issuedBeforeICFT = issuedPrincipalICFT[user];
+            uint256 issuedReductionICFT = repaidPrincipalUSD == principalDebtBeforeUSD
+                ? issuedBeforeICFT
+                : _mulDivRoundUp(issuedBeforeICFT, repaidPrincipalUSD, principalDebtBeforeUSD);
+
             position.principalDebtUSD -= repaidPrincipalUSD;
             totalPrincipalDebtUSD -= repaidPrincipalUSD;
+            issuedPrincipalICFT[user] = issuedBeforeICFT - issuedReductionICFT;
+            totalBorrowedICFT -= issuedReductionICFT;
         }
 
         position.lastAccrualIndex = borrowIndex;
@@ -747,6 +847,7 @@ contract LendingPool is Initializable, ILendingPool, AccessControlUpgradeable, P
 
     function _setCollateralAsset(address asset, bool enabled, bool isNative) internal {
         if (!collateralAssetKnown[asset]) {
+            if (supportedCollateralAssets.length >= MAX_COLLATERAL_ASSETS) revert CollateralAssetLimitReached();
             collateralAssetKnown[asset] = true;
             supportedCollateralAssets.push(asset);
         }
@@ -808,6 +909,45 @@ contract LendingPool is Initializable, ILendingPool, AccessControlUpgradeable, P
         returnedRevenueICFT = totalReturnedICFT - returnedPrincipalICFT;
     }
 
+    /// @dev Restores principal liquidity and routes interest between LP yield and the insurance reserve.
+    function _applyReturnedFunds(uint256 returnedPrincipalICFT, uint256 returnedRevenueICFT) internal {
+        uint256 insuranceContributionICFT = (returnedRevenueICFT * insuranceReserveBps) / BPS;
+        uint256 lpYieldICFT = returnedRevenueICFT - insuranceContributionICFT;
+
+        fundALiquidityICFT += returnedPrincipalICFT + lpYieldICFT;
+        protocolRevenueICFT += insuranceContributionICFT;
+
+        emit InterestRevenueAllocated(lpYieldICFT, insuranceContributionICFT);
+    }
+
+    /// @dev Closes a collateral-exhausted position and uses the reserve before recognizing LP loss.
+    function _writeOffBadDebtIfNeeded(address user, Position storage position) internal {
+        if (_hasAnyCollateral(user, position) || position.scaledDebtUSD == 0) {
+            return;
+        }
+
+        uint256 badDebtUSD = _debtFromScaled(position.scaledDebtUSD, borrowIndex);
+        uint256 badDebtICFT = priceOracle.convertUSDToICFT(badDebtUSD, true);
+        uint256 insuranceUsedICFT = badDebtICFT < protocolRevenueICFT ? badDebtICFT : protocolRevenueICFT;
+        uint256 uncoveredLossICFT = badDebtICFT - insuranceUsedICFT;
+
+        protocolRevenueICFT -= insuranceUsedICFT;
+        fundALiquidityICFT += insuranceUsedICFT;
+        // Uncovered loss reduces the capital base used by utilization calculations and future LP withdrawals.
+        fundAAllocation = _saturatingSub(fundAAllocation, uncoveredLossICFT);
+        totalBadDebtUSD += badDebtUSD;
+        totalScaledDebtUSD -= position.scaledDebtUSD;
+        totalPrincipalDebtUSD -= position.principalDebtUSD;
+        totalBorrowedICFT -= issuedPrincipalICFT[user];
+
+        position.scaledDebtUSD = 0;
+        position.principalDebtUSD = 0;
+        position.active = false;
+        issuedPrincipalICFT[user] = 0;
+
+        emit BadDebtWrittenOff(user, badDebtUSD, insuranceUsedICFT, uncoveredLossICFT);
+    }
+
     function _emitFundAAccountingUpdate() internal {
         emit FundAAccountingUpdated(
             fundALiquidityICFT,
@@ -833,10 +973,17 @@ contract LendingPool is Initializable, ILendingPool, AccessControlUpgradeable, P
         }
     }
 
+    function _mulDivRoundUp(uint256 a, uint256 b, uint256 denominator) internal pure returns (uint256 result) {
+        result = (a * b) / denominator;
+        if ((a * b) % denominator != 0) {
+            result += 1;
+        }
+    }
+
     function _previewBorrowIndex() internal view returns (uint256 previewIndex) {
         previewIndex = borrowIndex;
 
-        if (block.timestamp <= lastAccrualTime || totalScaledDebtUSD == 0 || totalBorrowedICFT == 0) {
+        if (paused() || block.timestamp <= lastAccrualTime || totalScaledDebtUSD == 0 || totalBorrowedICFT == 0) {
             return previewIndex;
         }
 

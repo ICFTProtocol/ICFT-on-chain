@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
-pragma solidity ^0.8.20;
+pragma solidity 0.8.30;
 
 import {ProtocolFixture} from "./helpers/ProtocolFixture.sol";
 import {MockChainlinkFeed} from "../src/mocks/MockChainlinkFeed.sol";
 import {PriceSource} from "../src/core/utils/PriceSource.sol";
+import {IncompleteOracleRound} from "../src/core/utils/Errors.sol";
 
 contract PriceOracleTest is ProtocolFixture {
     function setUp() public {
@@ -70,6 +71,13 @@ contract PriceOracleTest is ProtocolFixture {
     function testSetMaxPriceAgeRejectsZero() public {
         vm.expectRevert();
         oracle.setMaxPriceAge(0);
+    }
+
+    function testOracleRejectsIncompleteChainlinkRound() public {
+        ethFeed.setRoundId(0);
+
+        vm.expectRevert(IncompleteOracleRound.selector);
+        oracle.getETHUSDPrice();
     }
 
     function testConvertUsdToIcftSupportsRoundUpAndRoundDown() public view {

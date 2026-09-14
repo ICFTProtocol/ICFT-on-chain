@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-pragma solidity ^0.8.20;
+pragma solidity 0.8.30;
 
 import {ProtocolFixture} from "./helpers/ProtocolFixture.sol";
 import {InterestRateModel} from "../src/core/ICFT/lending/InterestRateModel.sol";
@@ -27,6 +27,22 @@ contract RiskAndRateModelTest is ProtocolFixture {
             rate2Bps: 800,
             rate3Bps: 1_500,
             rate4Bps: 2_000,
+            maxBorrowUtilizationBps: 9_000
+        });
+
+        vm.expectRevert();
+        rateModel.setRateConfig(badConfig);
+    }
+
+    function testRateModelRejectsRateAboveMaximumApr() public {
+        IInterestRateModel.RateConfig memory badConfig = IInterestRateModel.RateConfig({
+            kink1Bps: 5_000,
+            kink2Bps: 8_000,
+            kink3Bps: 9_000,
+            rate1Bps: 500,
+            rate2Bps: 800,
+            rate3Bps: 1_500,
+            rate4Bps: 10_001,
             maxBorrowUtilizationBps: 9_000
         });
 
@@ -83,17 +99,23 @@ contract RiskAndRateModelTest is ProtocolFixture {
         assertEq(outcome.resultingLtvBps, 0);
     }
 
-    function testRiskEngineReturnsCurrentLtvWhenThresholdEqualsTarget() public {
+    function testRiskEngineRejectsTargetLtvWithoutRequiredHeadroom() public {
+        vm.expectRevert();
         riskEngine.setRiskParameters(7_500, 8_500, 8_500, 300);
+    }
 
+    function testRiskEngineRejectsLiquidationBonusThatWouldBreakLiquidationMath() public {
+        // At 85% target LTV, 20% bonus underflows the liquidation denominator.
+        vm.expectRevert();
+        riskEngine.setRiskParameters(8_000, 9_000, 8_500, 2_000);
+    }
+
+    function testRiskEngineAcceptsParametersWithSafeHeadroom() public view {
         uint256 collateralValueUsd = 2_000e18;
-        uint256 debt = 1_700e18;
-        uint256 currentLtv = riskEngine.calculateLTV(collateralValueUsd, debt);
+        uint256 debt = 1_800e18;
         IRiskEngine.LiquidationOutcome memory outcome = riskEngine.calculateLiquidation(collateralValueUsd, debt);
 
-        assertEq(currentLtv, 8_500);
-        assertEq(outcome.debtToCoverUSD, 0);
-        assertEq(outcome.collateralValueSeizedUSD, 0);
-        assertEq(outcome.resultingLtvBps, currentLtv);
+        assertGt(outcome.debtToCoverUSD, 0);
+        assertLt(outcome.resultingLtvBps, riskEngine.getLiquidationThresholdBps());
     }
 }

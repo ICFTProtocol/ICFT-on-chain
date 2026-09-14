@@ -20,6 +20,9 @@ Set `MODULE` to one of:
 - `LendingPool`
 - `LiquidationEngine`
 
+`ICFTLiquidityVault` is deployed separately by `script/DeployICFTLiquidityVault.s.sol` because it is a new proxy,
+not an upgrade of an existing deployment.
+
 ## Required Environment Variables
 
 - `RPC_URL`
@@ -101,3 +104,30 @@ For the current Sepolia engineering baseline:
 - `wBTC` enablement depends on a valid token address and trusted price feed for that network;
 - `wstETH` enablement currently depends on a documented testnet-only oracle path;
 - post-upgrade verification should always include `getSupportedCollateralAssets()` and oracle support checks for every enabled collateral asset.
+
+## Audit Accounting Upgrade
+
+The LendingPool audit-remediation release adds position-level issued-principal tracking, bad-debt accounting,
+an insurance reserve, minimum borrow enforcement, and LP-vault integration.
+
+It must be upgraded only while `totalScaledDebtUSD` and `totalBorrowedICFT` are both zero. This is intentional:
+legacy borrower positions cannot be enumerated or safely migrated on-chain. After upgrading LendingPool,
+call `initializeAuditAccountingV3()` through `UPGRADE_CALLDATA`; it rejects a migration with live legacy debt.
+
+Only after that initialization succeeds may the team deploy the LP vault:
+
+```bash
+source .env
+forge script script/DeployICFTLiquidityVault.s.sol:DeployICFTLiquidityVault \
+  --rpc-url "$RPC_URL" \
+  --broadcast \
+  -vvvv
+```
+
+Before broadcasting, ensure:
+
+1. `LENDING_POOL_PROXY` is the upgraded pool proxy.
+2. The pool already holds the intended Fund A ICFT balance.
+3. `LP_INITIAL_OWNER` is the entity that economically owns that Fund A balance.
+4. The broadcaster currently has `DEFAULT_ADMIN_ROLE` on LendingPool, because the script grants `LP_VAULT_ROLE`.
+5. `LP_VAULT_UPGRADE_ADMIN_ADDRESS` is not a casual hot wallet.

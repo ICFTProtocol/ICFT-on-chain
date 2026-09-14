@@ -86,7 +86,7 @@
 //                                  inYLnt;.......................................:tjLCvl
 //                                      ;tJmCUx,..............................TUJmLTi.
 //                                           .tXYQqqLnT!t!Ii;;::;iIl!!tjUmmLYXj,
-pragma solidity ^0.8.20;
+pragma solidity 0.8.30;
 
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {ERC20Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol";
@@ -118,6 +118,7 @@ contract ICFT is Initializable, ERC20Upgradeable {
     uint256 public constant DEVELOPERS_ALLOCATION = 100_000_000 ether;
     /// @notice Allocation reserved for ecosystem grants and growth programs.
     uint256 public constant ECOSYSTEM_GRANTS_ALLOCATION = 30_000_000 ether;
+    uint256[50] private __gap;
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {

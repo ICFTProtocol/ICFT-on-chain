@@ -86,7 +86,7 @@
 //                                  inYLnt;.......................................:tjLCvl
 //                                      ;tJmCUx,..............................TUJmLTi.
 //                                           .tXYQqqLnT!t!Ii;;::;iIl!!tjUmmLYXj,
-pragma solidity ^0.8.20;
+pragma solidity 0.8.30;
 
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
@@ -107,12 +107,15 @@ import {InvalidAddress, InvalidRiskParameters} from "../../utils/Errors.sol";
 contract RiskEngine is Initializable, IRiskEngine, AccessControlUpgradeable {
     bytes32 public constant RISK_ADMIN_ROLE = keccak256("RISK_ADMIN_ROLE");
     uint256 public constant BPS = 10_000;
+    uint256 public constant MIN_LTV_GAP_BPS = 300;
+    uint256 public constant MAX_LIQUIDATION_BONUS_BPS = 1_500;
 
     IPriceOracle public priceOracle;
     uint256 public maxLtvBps;
     uint256 public liquidationThresholdBps;
     uint256 public targetLtvBps;
     uint256 public liquidationBonusBps;
+    uint256[50] private __gap;
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -150,7 +153,7 @@ contract RiskEngine is Initializable, IRiskEngine, AccessControlUpgradeable {
         return (collateralValueUSD * maxLtvBps) / BPS;
     }
 
-    function calculateLTV(uint256 collateralValueUSD, uint256 debtUSD) public view returns (uint256) {
+    function calculateLTV(uint256 collateralValueUSD, uint256 debtUSD) public pure returns (uint256) {
         if (debtUSD == 0) return 0;
         if (collateralValueUSD == 0) return type(uint256).max;
 
@@ -238,9 +241,11 @@ contract RiskEngine is Initializable, IRiskEngine, AccessControlUpgradeable {
     ) internal {
         bool invalid = maxLtvBps_ == 0
             || maxLtvBps_ >= liquidationThresholdBps_
-            || targetLtvBps_ > liquidationThresholdBps_
+            || targetLtvBps_ + MIN_LTV_GAP_BPS > liquidationThresholdBps_
             || liquidationThresholdBps_ > BPS
-            || liquidationBonusBps_ > BPS;
+            || liquidationBonusBps_ > MAX_LIQUIDATION_BONUS_BPS
+            // The liquidation denominator must remain strictly positive.
+            || targetLtvBps_ * (BPS + liquidationBonusBps_) >= BPS * BPS;
 
         if (invalid) revert InvalidRiskParameters();
 

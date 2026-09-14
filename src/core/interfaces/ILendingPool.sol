@@ -21,7 +21,7 @@
  * You should have received a copy of the GNU General Public License
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
-pragma solidity ^0.8.20;
+pragma solidity 0.8.30;
 
 import {IPriceOracle} from "./IPriceOracle.sol";
 import {IRiskEngine} from "./IRiskEngine.sol";
@@ -197,6 +197,27 @@ interface ILendingPool {
         uint256 totalAccruedInterestUSD,
         uint256 protocolRevenueICFT
     );
+
+    /**
+     * @notice Emitted when a collateral-exhausted position is closed and its remaining debt is recognized as bad debt.
+     * @param user Borrower whose residual debt was written off.
+     * @param badDebtUSD Unrecoverable debt recorded in protocol USD units.
+     * @param insuranceUsedICFT Reserve ICFT reclassified as pool liquidity to offset the loss.
+     * @param uncoveredLossICFT Loss remaining for LP share value after insurance is exhausted.
+     */
+    event BadDebtWrittenOff(
+        address indexed user,
+        uint256 badDebtUSD,
+        uint256 insuranceUsedICFT,
+        uint256 uncoveredLossICFT
+    );
+
+    /**
+     * @notice Emitted when interest repayment is split between LP yield and the insurance reserve.
+     * @param lpYieldICFT Interest retained in lendable LP liquidity.
+     * @param insuranceContributionICFT Interest reserved for future bad-debt coverage.
+     */
+    event InterestRevenueAllocated(uint256 lpYieldICFT, uint256 insuranceContributionICFT);
 
     /**
      * @notice Repays a liquidatable position and transfers seized collateral to the recipient.

@@ -86,7 +86,7 @@
 //                                  inYLnt;.......................................:tjLCvl
 //                                      ;tJmCUx,..............................TUJmLTi.
 //                                           .tXYQqqLnT!t!Ii;;::;iIl!!tjUmmLYXj,
-pragma solidity ^0.8.20;
+pragma solidity 0.8.30;
 
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
@@ -147,6 +147,7 @@ contract LiquidationEngine is Initializable, ILiquidationEngine, AccessControlUp
     uint256 public totalRepaidIcft;
     uint256 public totalRepaidUsd;
     mapping(address => uint256) public totalSeizedByAsset;
+    uint256[50] private __gap;
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {

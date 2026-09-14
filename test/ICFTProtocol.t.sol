@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-pragma solidity ^0.8.20;
+pragma solidity 0.8.30;
 
 import {TransparentUpgradeableProxy} from "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
 
@@ -11,6 +11,8 @@ import {LendingPool} from "../src/core/ICFT/lending/LendingPool.sol";
 import {LiquidationEngine} from "../src/core/ICFT/lending/LiquidationEngine.sol";
 import {RiskEngine} from "../src/core/ICFT/risk/RiskEngine.sol";
 import {IInterestRateModel} from "../src/core/interfaces/IInterestRateModel.sol";
+import {MockChainlinkFeed} from "../src/mocks/MockChainlinkFeed.sol";
+import {FeeOnTransferMockERC20} from "../src/mocks/FeeOnTransferMockERC20.sol";
 import {
     BorrowExceedsLTV,
     BorrowingDisabledAtUtilization,
@@ -71,7 +73,8 @@ contract ICFTProtocolTest is ProtocolFixture {
 
         assertEq(lendingPool.getDebt(alice), 0);
         assertEq(icft.balanceOf(alice), balanceBefore + 50 ether);
-        assertEq(lendingPool.totalBorrowedICFT(), 50 ether);
+        // Utilization tracks the original ICFT principal still outstanding, not the current-price repayment amount.
+        assertEq(lendingPool.totalBorrowedICFT(), 0);
         assertEq(lendingPool.fundALiquidityICFT(), FUND_A - 50 ether);
         assertEq(lendingPool.protocolRevenueICFT(), 0);
     }
@@ -179,19 +182,54 @@ contract ICFTProtocolTest is ProtocolFixture {
 
         vm.prank(alice);
         vm.expectRevert();
-        lendingPool.borrow(50 ether);
+        lendingPool.borrow(100 ether);
 
         lendingPool.unpause();
 
         vm.prank(alice);
-        lendingPool.borrow(50 ether);
+        lendingPool.borrow(100 ether);
 
         lendingPool.pause();
 
         vm.prank(alice);
         lendingPool.repay(10 ether);
 
-        assertLt(lendingPool.getDebt(alice), 50e18);
+        assertLt(lendingPool.getDebt(alice), 100e18);
+    }
+
+    function testPauseDoesNotAccrueInterestForFrozenTime() public {
+        vm.startPrank(alice);
+        lendingPool.depositCollateral{value: 1 ether}();
+        lendingPool.borrow(100 ether);
+        vm.stopPrank();
+
+        vm.warp(block.timestamp + 30 days);
+        lendingPool.pause();
+        uint256 debtAtPause = lendingPool.getDebt(alice);
+
+        vm.warp(block.timestamp + 30 days);
+        assertEq(lendingPool.getDebt(alice), debtAtPause);
+
+        lendingPool.unpause();
+        assertEq(lendingPool.getDebt(alice), debtAtPause);
+    }
+
+    function testFeeOnTransferCollateralCreditsOnlyReceivedAmount() public {
+        FeeOnTransferMockERC20 feeToken = new FeeOnTransferMockERC20();
+        MockChainlinkFeed feeFeed = new MockChainlinkFeed(8, 1e8);
+        uint256 depositAmount = 100 ether;
+
+        oracle.setCollateralAssetFeed(address(feeToken), address(feeFeed), 18, true);
+        lendingPool.setCollateralAsset(address(feeToken), true);
+        feeToken.mint(alice, depositAmount);
+
+        vm.startPrank(alice);
+        feeToken.approve(address(lendingPool), depositAmount);
+        lendingPool.depositCollateral(address(feeToken), depositAmount);
+        vm.stopPrank();
+
+        assertEq(lendingPool.getCollateralBalance(alice, address(feeToken)), 99 ether);
+        assertEq(feeToken.balanceOf(address(lendingPool)), 99 ether);
     }
 
     function testAccrueInterestWithNoDebtDoesNotChangeBorrowIndex() public {
@@ -359,8 +397,8 @@ contract ICFTProtocolTest is ProtocolFixture {
         lendingPool.repay(5 ether);
 
         assertEq(lendingPool.getDebt(alice), 100 ether);
-        assertEq(lendingPool.protocolRevenueICFT(), 5 ether);
-        assertEq(lendingPool.fundALiquidityICFT(), FUND_A - 100 ether);
+        assertEq(lendingPool.protocolRevenueICFT(), 0.75 ether);
+        assertEq(lendingPool.fundALiquidityICFT(), FUND_A - 95.75 ether);
         assertEq(lendingPool.totalBorrowedICFT(), 100 ether);
     }
 
@@ -378,8 +416,8 @@ contract ICFTProtocolTest is ProtocolFixture {
 
         assertEq(lendingPool.getDebt(alice), 0);
         assertEq(lendingPool.totalBorrowedICFT(), 0);
-        assertEq(lendingPool.fundALiquidityICFT(), FUND_A);
-        assertEq(lendingPool.protocolRevenueICFT(), 5 ether);
+        assertEq(lendingPool.fundALiquidityICFT(), FUND_A + 4.25 ether);
+        assertEq(lendingPool.protocolRevenueICFT(), 0.75 ether);
     }
 
     function testInitializersRejectZeroAdmin() public {

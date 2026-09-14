@@ -86,7 +86,7 @@
 //                                  inYLnt;.......................................:tjLCvl
 //                                      ;tJmCUx,..............................TUJmLTi.
 //                                           .tXYQqqLnT!t!Ii;;::;iIl!!tjUmmLYXj,
-pragma solidity ^0.8.20;
+pragma solidity 0.8.30;
 
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
@@ -108,9 +108,12 @@ contract InterestRateModel is Initializable, IInterestRateModel, AccessControlUp
 
     /// @notice Basis-point denominator used for utilization and APR values.
     uint256 public constant BPS = 10_000;
+    /// @notice Maximum annual borrow rate accepted by the configuration, expressed in basis points.
+    uint256 public constant MAX_BORROW_APR_BPS = 10_000;
 
     /// @notice Active utilization curve configuration.
     RateConfig public rateConfig;
+    uint256[50] private __gap;
 
     /**
      * @notice Creates the rate model with the initial piecewise utilization curve.
@@ -167,7 +170,8 @@ contract InterestRateModel is Initializable, IInterestRateModel, AccessControlUp
 
         bool validRates = newConfig.rate1Bps <= newConfig.rate2Bps
             && newConfig.rate2Bps <= newConfig.rate3Bps
-            && newConfig.rate3Bps <= newConfig.rate4Bps;
+            && newConfig.rate3Bps <= newConfig.rate4Bps
+            && newConfig.rate4Bps <= MAX_BORROW_APR_BPS;
 
         if (!validOrder || !validRates || newConfig.maxBorrowUtilizationBps < newConfig.kink3Bps) {
             revert InvalidRateConfig();

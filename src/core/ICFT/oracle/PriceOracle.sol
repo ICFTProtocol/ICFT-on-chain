@@ -86,7 +86,7 @@
 //                                  inYLnt;.......................................:tjLCvl
 //                                      ;tJmCUx,..............................TUJmLTi.
 //                                           .tXYQqqLnT!t!Ii;;::;iIl!!tjUmmLYXj,
-pragma solidity ^0.8.20;
+pragma solidity 0.8.30;
 
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
@@ -98,6 +98,7 @@ import {
     InvalidManualPrice,
     InvalidOracleAddress,
     InvalidOracleAnswer,
+    IncompleteOracleRound,
     StaleOraclePrice,
     UnsupportedCollateralAsset,
     UnsupportedPriceDecimals
@@ -135,6 +136,7 @@ contract PriceOracle is Initializable, IPriceOracle, AccessControlUpgradeable {
     // collateralFeeds must remain after legacy oracle fields so Sepolia proxy
     // state from the earlier oracle version is interpreted correctly.
     mapping(address => CollateralFeedConfig) internal collateralFeeds;
+    uint256[50] private __gap;
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -298,9 +300,10 @@ contract PriceOracle is Initializable, IPriceOracle, AccessControlUpgradeable {
     function _getChainlinkPrice(AggregatorV3Interface feed) internal view returns (uint256 normalizedPrice) {
         if (address(feed) == address(0)) revert InvalidOracleAddress();
 
-        (, int256 answer,, uint256 updatedAt,) = feed.latestRoundData();
+        (uint80 roundId, int256 answer,, uint256 updatedAt, uint80 answeredInRound) = feed.latestRoundData();
 
         if (answer <= 0 || updatedAt == 0) revert InvalidOracleAnswer();
+        if (roundId == 0 || answeredInRound < roundId) revert IncompleteOracleRound();
         if (block.timestamp > updatedAt + maxPriceAge) revert StaleOraclePrice();
 
         return normalizePrice(uint256(answer), feed.decimals());

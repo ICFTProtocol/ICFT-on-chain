@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-pragma solidity ^0.8.20;
+pragma solidity 0.8.30;
 
 import {StdInvariant} from "forge-std/StdInvariant.sol";
 import {Test} from "forge-std/Test.sol";
@@ -108,6 +108,7 @@ contract ICFTProtocolInvariantTest is StdInvariant, ProtocolFixture {
 
     function setUp() public {
         _setUpProtocol();
+        lendingPool.setMinimumBorrowUSD(1);
         handler = new ProtocolHandler(lendingPool, alice, bob, carol, liquidator);
         targetContract(address(handler));
     }
@@ -116,8 +117,8 @@ contract ICFTProtocolInvariantTest is StdInvariant, ProtocolFixture {
         assertLe(lendingPool.totalBorrowedICFT(), FUND_A);
     }
 
-    function invariant_FundALiquidityNeverExceedsAllocation() public view {
-        assertLe(lendingPool.fundALiquidityICFT(), FUND_A);
+    function invariant_FundALiquidityNeverExceedsSpendablePoolBalance() public view {
+        assertLe(lendingPool.fundALiquidityICFT(), lendingPool.getSpendablePrincipalBalance());
     }
 
     function invariant_AvailableLiquidityNeverExceedsFundALiquidity() public view {
