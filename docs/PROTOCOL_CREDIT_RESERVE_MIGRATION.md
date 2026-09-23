@@ -47,6 +47,18 @@ Create an audited migration contract with a time-bounded opt-in claim for holder
 
 An official ICFT DEX/CEX venue can provide market depth for voluntary buying and selling, including repayment acquisition. It must not be described as the LendingPool credit reserve. Publish market cap, trading links, TVL, depth, and price only after official pairs and a credible price methodology exist.
 
+## USD Capacity and ICFT Price
+
+The number of ICFT in the protocol reserve remains fixed unless an authorized reserve action changes it. If a credible ICFT/USD market price rises, the **USD value** of the same reserve rises. A new $100 loan would then transfer fewer ICFT: at $1 per ICFT it transfers 100 ICFT; at $2 it transfers 50 ICFT. This is a unit-of-account effect, not the creation of additional ICFT.
+
+Adding USDT to a DEX pool is not by itself a reliable or sustainable mechanism for raising price. A two-sided AMM pool needs both assets, and a price that differs from the broader market will be arbitraged. Price policy, market-making, circulating supply, market depth, slippage, and manipulation resistance require an economics and risk review.
+
+## Existing Debt Price-Sensitivity Gate
+
+The current LendingPool records debt in USD and uses `PriceOracle.convertUSDToICFT` when calculating full repayment. Therefore an ICFT price change changes the number of ICFT needed to settle an already-open USD debt. Example: a borrower who receives 100 ICFT for $100 at $1 would need approximately 50 ICFT principal to settle that $100 debt if the oracle later reports $2.
+
+This behavior must be explicitly approved or redesigned before a market-derived ICFT price is adopted. A manipulated or volatile ICFT oracle can otherwise affect repayment token amounts, reserve-token accounting, borrower incentives, and liquidation economics. A production decision needs at minimum a robust oracle methodology, price-deviation controls, a TWAP or equivalent where appropriate, and tests covering price movements before and after origination.
+
 ## Upgrade Gate
 
 Do not broadcast an upgrade until all preconditions pass, all existing share holders have a documented outcome, the storage layout has been checked, Foundry tests and a fork rehearsal pass, and the team signs an execution checklist. Sepolia is a rehearsal environment, not an exception to these controls.
