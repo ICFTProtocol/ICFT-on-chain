@@ -79,6 +79,43 @@ contract ICFTProtocolTest is ProtocolFixture {
         assertEq(lendingPool.protocolRevenueICFT(), 0);
     }
 
+    function testHigherICFTPriceIssuesFewerTokensForTheSameUsdCreditCapacity() public {
+        vm.prank(alice);
+        lendingPool.depositCollateral{value: 1 ether}();
+
+        // One ETH is worth $2,000 and the 80% max LTV permits a $1,600 USD debt.
+        // At $2 per ICFT, that credit line must issue 800 ICFT rather than 1,600 ICFT.
+        oracle.setManualICFTPrice(2e8, 8);
+
+        assertEq(lendingPool.getAvailableBorrow(alice), 800 ether);
+
+        vm.prank(alice);
+        lendingPool.borrow(800 ether);
+
+        assertEq(lendingPool.getDebt(alice), 1_600 ether);
+        assertEq(lendingPool.totalBorrowedICFT(), 800 ether);
+        assertEq(lendingPool.getAvailableBorrow(alice), 0);
+    }
+
+    function testLowerICFTPriceRequiresMoreTokensToSettleTheSameUsdDebt() public {
+        vm.startPrank(alice);
+        lendingPool.depositCollateral{value: 1 ether}();
+        lendingPool.borrow(100 ether);
+        vm.stopPrank();
+
+        // The debt is fixed at $100. At $0.50 per ICFT, full settlement requires 200 ICFT.
+        oracle.setManualICFTPrice(5e7, 8);
+
+        assertEq(oracle.convertUSDToICFT(lendingPool.getDebt(alice), true), 200 ether);
+
+        vm.prank(alice);
+        lendingPool.repay(200 ether);
+
+        assertEq(lendingPool.getDebt(alice), 0);
+        assertEq(lendingPool.totalBorrowedICFT(), 0);
+        assertEq(lendingPool.fundALiquidityICFT(), FUND_A + 100 ether);
+    }
+
     function testAccrualUsesOldUtilizationBeforeNewBorrowChangesIt() public {
         vm.deal(alice, 30_000 ether);
         vm.deal(bob, 80_000 ether);

@@ -55,9 +55,9 @@ Adding USDT to a DEX pool is not by itself a reliable or sustainable mechanism f
 
 ## Existing Debt Price-Sensitivity Gate
 
-The current LendingPool records debt in USD and uses `PriceOracle.convertUSDToICFT` when calculating full repayment. Therefore an ICFT price change changes the number of ICFT needed to settle an already-open USD debt. Example: a borrower who receives 100 ICFT for $100 at $1 would need approximately 50 ICFT principal to settle that $100 debt if the oracle later reports $2.
+The approved ICFT policy is **USD-denominated debt with settlement in ICFT at the current approved ICFT/USD price**. The LendingPool records debt in USD and uses `PriceOracle.convertUSDToICFT` when calculating full repayment. Therefore an ICFT price change changes the number of ICFT needed to settle an already-open USD debt. Example: a borrower who receives 100 ICFT for $100 at $1 would need approximately 50 ICFT principal to settle that $100 debt if the oracle later reports $2.
 
-This behavior must be explicitly approved or redesigned before a market-derived ICFT price is adopted. A manipulated or volatile ICFT oracle can otherwise affect repayment token amounts, reserve-token accounting, borrower incentives, and liquidation economics. A production decision needs at minimum a robust oracle methodology, price-deviation controls, a TWAP or equivalent where appropriate, and tests covering price movements before and after origination.
+This approved behavior still requires protection before a market-derived ICFT price is adopted. A manipulated or volatile ICFT oracle can affect repayment token amounts, reserve-token accounting, borrower incentives, and liquidation economics. A production release needs at minimum a robust oracle methodology, price-deviation controls, a TWAP or equivalent where appropriate, and tests covering price movements before and after origination.
 
 ## Upgrade Gate
 
