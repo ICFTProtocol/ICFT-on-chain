@@ -2,7 +2,7 @@
 
 ## Decision
 
-ICFT's intended product model uses protocol-owned ICFT credit inventory rather than a public credit-liquidity provider model. The initial inventory is funded from the Fund A allocation. External market makers or DEX liquidity providers are a separate market-infrastructure concern and do not fund the LendingPool.
+ICFT's intended product model uses protocol-owned ICFT credit inventory rather than a public ICFT credit-liquidity provider model. The initial inventory is funded from the Fund A allocation. Under the canonical investor whitepaper, external market LPs contribute USDT to ICFT/USDT trading liquidity while the protocol contributes ICFT. Those LPs support market trading and do not fund the LendingPool credit reserve.
 
 ## Current Sepolia State
 
@@ -53,9 +53,11 @@ The number of ICFT in the protocol reserve remains fixed unless an authorized re
 
 Adding USDT to a DEX pool is not by itself a reliable or sustainable mechanism for raising price. A two-sided AMM pool needs both assets, and a price that differs from the broader market will be arbitraged. Price policy, market-making, circulating supply, market depth, slippage, and manipulation resistance require an economics and risk review.
 
-## Existing Debt Price-Sensitivity Gate
+## USD-Denominated Debt and Settlement
 
-The approved ICFT policy is **USD-denominated debt with settlement in ICFT at the current approved ICFT/USD price**. The LendingPool records debt in USD and uses `PriceOracle.convertUSDToICFT` when calculating full repayment. Therefore an ICFT price change changes the number of ICFT needed to settle an already-open USD debt. Example: a borrower who receives 100 ICFT for $100 at $1 would need approximately 50 ICFT principal to settle that $100 debt if the oracle later reports $2.
+The canonical whitepaper policy is **USD-denominated debt with settlement in ICFT at the current approved ICFT/USD price**. The LendingPool records debt in USD and uses `PriceOracle.convertUSDToICFT` when calculating full repayment. Therefore an ICFT price change changes the number of ICFT needed to settle an already-open USD debt. Example: a borrower who receives 100 ICFT for $100 at $1 would need approximately 50 ICFT principal to settle that $100 debt if the oracle later reports $2.
+
+The whitepaper also specifies direct USDT repayment: the protocol accepts USDT, settles the USD debt, and uses USDT to acquire ICFT at the market price for circulation and/or burn under protocol rules. This path is **not implemented** in the current LendingPool.
 
 This approved behavior still requires protection before a market-derived ICFT price is adopted. A manipulated or volatile ICFT oracle can affect repayment token amounts, reserve-token accounting, borrower incentives, and liquidation economics. A production release needs at minimum a robust oracle methodology, price-deviation controls, a TWAP or equivalent where appropriate, and tests covering price movements before and after origination.
 
