@@ -105,6 +105,30 @@ interface ILendingPool {
     event Repay(address indexed user, uint256 amountICFT, uint256 repaidDebtUSD, uint256 remainingDebtUSD);
 
     /**
+     * @notice Emitted when a user settles USD-denominated debt with the configured USDT asset.
+     * @param user Borrower whose debt was reduced.
+     * @param amountUSDT USDT received by the settlement reserve in native token decimals.
+     * @param repaidDebtUSD Debt value extinguished in internal USD units.
+     * @param remainingDebtUSD Borrower's remaining total debt in internal USD units.
+     */
+    event RepayWithUSDT(address indexed user, uint256 amountUSDT, uint256 repaidDebtUSD, uint256 remainingDebtUSD);
+
+    /**
+     * @notice Emitted after the USDT settlement module is bound to the pool.
+     * @param settlementAsset ERC20 asset accepted as USDT settlement.
+     * @param settlementReserve Reserve custody contract receiving the asset.
+     * @param decimals Native decimals used by the settlement asset.
+     */
+    event USDTSettlementConfigured(address indexed settlementAsset, address indexed settlementReserve, uint8 decimals);
+
+    /**
+     * @notice Emitted when market-bought ICFT is returned to the lendable Fund A inventory.
+     * @param source Authorized settlement reserve that supplied ICFT.
+     * @param amountICFT ICFT amount restored to credit liquidity.
+     */
+    event CreditReserveReplenished(address indexed source, uint256 amountICFT);
+
+    /**
      * @notice Emitted when a position is liquidated.
      * @param user Borrower whose position was liquidated.
      * @param liquidator Authorized liquidation caller that repaid ICFT.
@@ -206,10 +230,7 @@ interface ILendingPool {
      * @param uncoveredLossICFT Loss remaining for LP share value after insurance is exhausted.
      */
     event BadDebtWrittenOff(
-        address indexed user,
-        uint256 badDebtUSD,
-        uint256 insuranceUsedICFT,
-        uint256 uncoveredLossICFT
+        address indexed user, uint256 badDebtUSD, uint256 insuranceUsedICFT, uint256 uncoveredLossICFT
     );
 
     /**
@@ -228,6 +249,25 @@ interface ILendingPool {
      */
     function liquidate(address user, address collateralAsset, uint256 maxICFTToRepay, address collateralRecipient)
         external;
+
+    /**
+     * @notice Settles debt using the configured USDT asset.
+     * @param amountUSDT Maximum USDT amount to use in native token decimals.
+     */
+    function repayWithUSDT(uint256 amountUSDT) external;
+
+    /**
+     * @notice Pulls canonical market-bought ICFT from the authorized settlement reserve into Fund A liquidity.
+     * @param amountICFT Exact ICFT amount to restore.
+     */
+    function replenishCreditReserveFromMarket(uint256 amountICFT) external;
+
+    /**
+     * @notice Quotes the USDT amount required to fully settle current debt, rounded up.
+     * @param user Borrower address.
+     * @return amountUSDT Required native-USDT amount, or zero when USDT settlement is not configured.
+     */
+    function getFullRepayUSDT(address user) external view returns (uint256 amountUSDT);
 
     /**
      * @notice Returns a user's total debt in internal USD accounting units.

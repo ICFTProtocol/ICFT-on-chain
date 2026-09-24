@@ -28,12 +28,16 @@ Older whitepaper and tokenomics files remain historical context. Where they diff
 - Fund A ICFT inventory and utilization-based borrowing limits.
 - USD-denominated debt accounting.
 - ICFT repayment using the current configured ICFT/USD price.
+- Optional USDT repayment through an upgradeable settlement reserve. USDT is held pending market execution;
+  it does not immediately recreate ICFT credit inventory.
+- A role-gated path to return market-bought canonical ICFT to Fund A credit inventory after settlement.
 - ETH, wBTC, and wstETH collateral for the current testnet baseline.
 - Interest accrual, risk limits, liquidations, insurance accounting, upgradeable modules, frontend borrower flows, and a dry-run keeper.
 
 ### Not Implemented Yet
 
-- Direct USDT repayment and the market purchase of ICFT after USDT settlement.
+- An approved ICFT/USDT market purchase executor. The current reserve deliberately has no embedded DEX router,
+  route, quote, deadline, slippage policy, or automated buyback execution.
 - An approved ICFT/USDT market venue, protocol-provided ICFT market liquidity, and external-USDT-LP integration.
 - A production-grade ICFT/USD market oracle with manipulation resistance.
 - Buyback and burn execution, accounting, limits, and reporting.
@@ -45,7 +49,7 @@ Older whitepaper and tokenomics files remain historical context. Where they diff
 ## Engineering Order
 
 1. Preserve the Sepolia borrower demo and deprecate legacy public ICFT LP actions.
-2. Design and test the USDT repayment and reserve-accounting module in isolation.
+2. Deploy and configure the tested USDT repayment and reserve-accounting module only after a storage-layout and fork review.
 3. Add an approved ICFT market-price oracle only after a real venue and liquidity methodology exist.
 4. Integrate verified ICFT/USDT market routing with strict slippage and liquidity limits.
 5. Add buyback/burn and USDT reserve modules after their policy parameters are represented on-chain.

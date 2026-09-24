@@ -93,6 +93,7 @@ import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/acce
 import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Address} from "@openzeppelin/contracts/utils/Address.sol";
 
@@ -100,6 +101,7 @@ import {IInterestRateModel} from "../../interfaces/IInterestRateModel.sol";
 import {ILendingPool} from "../../interfaces/ILendingPool.sol";
 import {IPriceOracle} from "../../interfaces/IPriceOracle.sol";
 import {IRiskEngine} from "../../interfaces/IRiskEngine.sol";
+import {IUSDTSettlementReserve} from "../../interfaces/IUSDTSettlementReserve.sol";
 import {
     BorrowExceedsLTV,
     BorrowBelowMinimum,
@@ -110,12 +112,16 @@ import {
     InsufficientLiquidity,
     InvalidAddress,
     InvalidBps,
+    InvalidAssetDecimals,
+    InvalidUSDTSettlementConfiguration,
     MigrationRequiresZeroDebt,
     NoDebt,
     NothingToRepay,
     NotLiquidatable,
     SlippageExceeded,
+    SettlementTransferMismatch,
     UnsupportedCollateralAsset,
+    USDTSettlementNotConfigured,
     ZeroCollateralReceived,
     ZeroAmount
 } from "../../utils/Errors.sol";
@@ -131,7 +137,13 @@ import {
  *
  * @custom:version 1.2.0
  */
-contract LendingPool is Initializable, ILendingPool, AccessControlUpgradeable, PausableUpgradeable, ReentrancyGuardUpgradeable {
+contract LendingPool is
+    Initializable,
+    ILendingPool,
+    AccessControlUpgradeable,
+    PausableUpgradeable,
+    ReentrancyGuardUpgradeable
+{
     using Address for address payable;
     using SafeERC20 for IERC20;
 
@@ -139,6 +151,7 @@ contract LendingPool is Initializable, ILendingPool, AccessControlUpgradeable, P
     bytes32 public constant CONFIG_ADMIN_ROLE = keccak256("CONFIG_ADMIN_ROLE");
     bytes32 public constant LIQUIDATION_BOT_ROLE = keccak256("LIQUIDATION_BOT_ROLE");
     bytes32 public constant LP_VAULT_ROLE = keccak256("LP_VAULT_ROLE");
+    bytes32 public constant USDT_SETTLEMENT_RESERVE_ROLE = keccak256("USDT_SETTLEMENT_RESERVE_ROLE");
 
     uint256 public constant BPS = 10_000;
     uint256 public constant YEAR = 365 days;
@@ -193,7 +206,12 @@ contract LendingPool is Initializable, ILendingPool, AccessControlUpgradeable, P
     uint256 public minimumBorrowUSD;
     uint256 public totalBadDebtUSD;
     mapping(address => uint256) public issuedPrincipalICFT;
-    uint256[43] private __gap;
+
+    // V4 settlement state. It is appended to preserve every previously deployed proxy storage slot.
+    IERC20 public usdtSettlementAsset;
+    IUSDTSettlementReserve public usdtSettlementReserve;
+    uint8 public usdtSettlementAssetDecimals;
+    uint256[40] private __gap;
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -210,11 +228,8 @@ contract LendingPool is Initializable, ILendingPool, AccessControlUpgradeable, P
         uint256 liquidityBuffer_
     ) external initializer {
         if (
-            admin == address(0) ||
-            icft_ == address(0) ||
-            priceOracle_ == address(0) ||
-            riskEngine_ == address(0) ||
-            interestRateModel_ == address(0)
+            admin == address(0) || icft_ == address(0) || priceOracle_ == address(0) || riskEngine_ == address(0)
+                || interestRateModel_ == address(0)
         ) revert InvalidAddress();
         if (fundAAllocation_ == 0) revert ZeroAmount();
 
@@ -255,6 +270,38 @@ contract LendingPool is Initializable, ILendingPool, AccessControlUpgradeable, P
 
         insuranceReserveBps = DEFAULT_INSURANCE_RESERVE_BPS;
         minimumBorrowUSD = DEFAULT_MIN_BORROW_USD;
+    }
+
+    /**
+     * @notice Configures USDT as an optional settlement path for existing USD-denominated debt.
+     * @dev The reserve must be bound to this pool and the same ERC20 asset. USDT funds are not
+     * converted to ICFT here; replenishment only happens after separately reviewed market execution.
+     * @param settlementAsset_ ERC20 USDT asset whose native decimals must not exceed 18.
+     * @param settlementReserve_ Reserve that custodizes received USDT before market execution.
+     */
+    function initializeUSDTSettlementV4(address settlementAsset_, address settlementReserve_)
+        external
+        reinitializer(4)
+        onlyRole(CONFIG_ADMIN_ROLE)
+    {
+        if (settlementAsset_ == address(0) || settlementReserve_ == address(0)) {
+            revert InvalidUSDTSettlementConfiguration();
+        }
+
+        uint8 settlementDecimals = IERC20Metadata(settlementAsset_).decimals();
+        if (settlementDecimals > 18) revert InvalidAssetDecimals();
+
+        IUSDTSettlementReserve reserve_ = IUSDTSettlementReserve(settlementReserve_);
+        if (reserve_.settlementAsset() != settlementAsset_ || reserve_.lendingPool() != address(this)) {
+            revert InvalidUSDTSettlementConfiguration();
+        }
+
+        usdtSettlementAsset = IERC20(settlementAsset_);
+        usdtSettlementReserve = reserve_;
+        usdtSettlementAssetDecimals = settlementDecimals;
+        _grantRole(USDT_SETTLEMENT_RESERVE_ROLE, settlementReserve_);
+
+        emit USDTSettlementConfigured(settlementAsset_, settlementReserve_, settlementDecimals);
     }
 
     receive() external payable {
@@ -378,6 +425,46 @@ contract LendingPool is Initializable, ILendingPool, AccessControlUpgradeable, P
         emit Repay(msg.sender, actualICFT, repaidDebtUSD, getDebt(msg.sender));
     }
 
+    /**
+     * @notice Repays USD-denominated debt with USDT and transfers settlement funds to the protocol reserve.
+     * @dev No ICFT is returned to Fund A in this call. Credit inventory is restored only when ICFT bought
+     * with this USDT is transferred back through `replenishCreditReserveFromMarket`.
+     * @param amountUSDT Maximum USDT amount to settle, in the settlement token's native decimals.
+     */
+    function repayWithUSDT(uint256 amountUSDT) external nonReentrant {
+        if (amountUSDT == 0) revert ZeroAmount();
+        if (address(usdtSettlementReserve) == address(0)) revert USDTSettlementNotConfigured();
+
+        Position storage position = positions[msg.sender];
+        uint256 totalDebtUSD = _syncPosition(position, msg.sender);
+        if (totalDebtUSD == 0) revert NoDebt();
+
+        uint256 fullRepayUSDT = _convertUSDToSettlementAsset(totalDebtUSD, true);
+        uint256 actualUSDT = amountUSDT < fullRepayUSDT ? amountUSDT : fullRepayUSDT;
+        uint256 repaidDebtUSD = actualUSDT == fullRepayUSDT ? totalDebtUSD : _convertSettlementAssetToUSD(actualUSDT);
+        if (repaidDebtUSD == 0) revert NothingToRepay();
+
+        DebtSettlement memory settlement = _prepareDebtSettlement(position, totalDebtUSD, repaidDebtUSD, 0);
+        address reserveAddress = address(usdtSettlementReserve);
+        uint256 reserveBalanceBefore = usdtSettlementAsset.balanceOf(reserveAddress);
+        usdtSettlementAsset.safeTransferFrom(msg.sender, reserveAddress, actualUSDT);
+        if (usdtSettlementAsset.balanceOf(reserveAddress) - reserveBalanceBefore != actualUSDT) {
+            revert SettlementTransferMismatch();
+        }
+
+        _reduceDebt(position, totalDebtUSD, repaidDebtUSD, settlement.repaidPrincipalUSD, msg.sender);
+        usdtSettlementReserve.recordSettlement(
+            msg.sender,
+            actualUSDT,
+            repaidDebtUSD,
+            settlement.repaidPrincipalUSD,
+            repaidDebtUSD - settlement.repaidPrincipalUSD
+        );
+
+        _emitFundAAccountingUpdate();
+        emit RepayWithUSDT(msg.sender, actualUSDT, repaidDebtUSD, getDebt(msg.sender));
+    }
+
     function liquidate(address user, address collateralAsset, uint256 maxICFTToRepay, address collateralRecipient)
         external
         nonReentrant
@@ -486,6 +573,28 @@ contract LendingPool is Initializable, ILendingPool, AccessControlUpgradeable, P
         _emitFundAAccountingUpdate();
     }
 
+    /**
+     * @notice Restores lendable ICFT inventory after an authorized market executor has bought ICFT with settled USDT.
+     * @dev The caller is the settlement reserve, which must first receive bought ICFT and approve this pool.
+     * @param amountICFT Maximum ICFT amount to pull into Fund A credit inventory.
+     */
+    function replenishCreditReserveFromMarket(uint256 amountICFT)
+        external
+        nonReentrant
+        onlyRole(USDT_SETTLEMENT_RESERVE_ROLE)
+    {
+        if (amountICFT == 0) revert ZeroAmount();
+
+        uint256 balanceBefore = icft.balanceOf(address(this));
+        icft.safeTransferFrom(msg.sender, address(this), amountICFT);
+        uint256 receivedICFT = icft.balanceOf(address(this)) - balanceBefore;
+        if (receivedICFT != amountICFT) revert SettlementTransferMismatch();
+
+        fundALiquidityICFT += receivedICFT;
+        _emitFundAAccountingUpdate();
+        emit CreditReserveReplenished(msg.sender, receivedICFT);
+    }
+
     function setCollateralAsset(address asset, bool enabled) external onlyRole(CONFIG_ADMIN_ROLE) {
         if (asset != NATIVE_ASSET && enabled && !priceOracle.isCollateralAssetSupported(asset)) {
             revert UnsupportedCollateralAsset();
@@ -510,6 +619,17 @@ contract LendingPool is Initializable, ILendingPool, AccessControlUpgradeable, P
     function getDebt(address user) public view returns (uint256) {
         Position memory position = positions[user];
         return _debtFromScaled(position.scaledDebtUSD, _previewBorrowIndex());
+    }
+
+    /**
+     * @notice Quotes the USDT amount required to fully settle a user's current USD debt.
+     * @dev Returns zero until the optional USDT settlement module is configured.
+     * @param user Borrower address.
+     * @return amountUSDT Full settlement amount in native USDT decimals, rounded up.
+     */
+    function getFullRepayUSDT(address user) external view returns (uint256 amountUSDT) {
+        if (address(usdtSettlementReserve) == address(0)) return 0;
+        return _convertUSDToSettlementAsset(getDebt(user), true);
     }
 
     function getCollateralBalance(address user, address asset) public view returns (uint256 balance) {
@@ -569,7 +689,8 @@ contract LendingPool is Initializable, ILendingPool, AccessControlUpgradeable, P
 
     function getAvailableLiquidity() public view returns (uint256 availableLiquidityICFT) {
         uint256 spendablePrincipalBalance = getSpendablePrincipalBalance();
-        uint256 principalInventory = fundALiquidityICFT < spendablePrincipalBalance ? fundALiquidityICFT : spendablePrincipalBalance;
+        uint256 principalInventory =
+            fundALiquidityICFT < spendablePrincipalBalance ? fundALiquidityICFT : spendablePrincipalBalance;
 
         if (principalInventory <= liquidityBuffer) return 0;
 
@@ -580,9 +701,8 @@ contract LendingPool is Initializable, ILendingPool, AccessControlUpgradeable, P
     /// @dev Reserve ICFT is excluded because it is earmarked for bad-debt coverage before LP losses are socialized.
     function getLPTotalAssets() public view returns (uint256 totalAssetsICFT) {
         uint256 idleAssetsICFT = getSpendablePrincipalBalance();
-        uint256 outstandingDebtICFT = priceOracle.convertUSDToICFT(
-            _debtFromScaled(totalScaledDebtUSD, _previewBorrowIndex()), false
-        );
+        uint256 outstandingDebtICFT =
+            priceOracle.convertUSDToICFT(_debtFromScaled(totalScaledDebtUSD, _previewBorrowIndex()), false);
 
         return idleAssetsICFT + outstandingDebtICFT;
     }
@@ -713,7 +833,9 @@ contract LendingPool is Initializable, ILendingPool, AccessControlUpgradeable, P
         uint256 totalDebtUSD,
         uint256 totalCollateralValueUSD
     ) internal view returns (LiquidationSettlement memory settlement) {
-        if (!_isKnownCollateralAsset(collateralAsset)) revert UnsupportedCollateralAsset();
+        if (!_isKnownCollateralAsset(collateralAsset)) {
+            revert UnsupportedCollateralAsset();
+        }
 
         uint256 collateralBalance = getCollateralBalance(user, collateralAsset);
         if (collateralBalance == 0) return settlement;
@@ -909,6 +1031,18 @@ contract LendingPool is Initializable, ILendingPool, AccessControlUpgradeable, P
         returnedRevenueICFT = totalReturnedICFT - returnedPrincipalICFT;
     }
 
+    function _convertSettlementAssetToUSD(uint256 amountUSDT) internal view returns (uint256) {
+        return amountUSDT * 10 ** (18 - usdtSettlementAssetDecimals);
+    }
+
+    function _convertUSDToSettlementAsset(uint256 amountUSD, bool roundUp) internal view returns (uint256 amountUSDT) {
+        uint256 scale = 10 ** (18 - usdtSettlementAssetDecimals);
+        amountUSDT = amountUSD / scale;
+        if (roundUp && amountUSD % scale != 0) {
+            amountUSDT += 1;
+        }
+    }
+
     /// @dev Restores principal liquidity and routes interest between LP yield and the insurance reserve.
     function _applyReturnedFunds(uint256 returnedPrincipalICFT, uint256 returnedRevenueICFT) internal {
         uint256 insuranceContributionICFT = (returnedRevenueICFT * insuranceReserveBps) / BPS;
@@ -950,11 +1084,7 @@ contract LendingPool is Initializable, ILendingPool, AccessControlUpgradeable, P
 
     function _emitFundAAccountingUpdate() internal {
         emit FundAAccountingUpdated(
-            fundALiquidityICFT,
-            totalBorrowedICFT,
-            totalPrincipalDebtUSD,
-            totalAccruedInterestUSD(),
-            protocolRevenueICFT
+            fundALiquidityICFT, totalBorrowedICFT, totalPrincipalDebtUSD, totalAccruedInterestUSD(), protocolRevenueICFT
         );
     }
 

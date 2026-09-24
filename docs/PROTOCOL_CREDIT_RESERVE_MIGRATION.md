@@ -57,7 +57,15 @@ Adding USDT to a DEX pool is not by itself a reliable or sustainable mechanism f
 
 The canonical whitepaper policy is **USD-denominated debt with settlement in ICFT at the current approved ICFT/USD price**. The LendingPool records debt in USD and uses `PriceOracle.convertUSDToICFT` when calculating full repayment. Therefore an ICFT price change changes the number of ICFT needed to settle an already-open USD debt. Example: a borrower who receives 100 ICFT for $100 at $1 would need approximately 50 ICFT principal to settle that $100 debt if the oracle later reports $2.
 
-The whitepaper also specifies direct USDT repayment: the protocol accepts USDT, settles the USD debt, and uses USDT to acquire ICFT at the market price for circulation and/or burn under protocol rules. This path is **not implemented** in the current LendingPool.
+The whitepaper also specifies direct USDT repayment: the protocol accepts USDT, settles the USD debt, and uses USDT to acquire ICFT at the market price for circulation and/or burn under protocol rules. The codebase now contains the first, deliberately constrained stage of this path:
+
+1. `LendingPool.repayWithUSDT` reduces the fixed USD debt at a 1 USDT = 1 USD settlement value and transfers the exact USDT amount to `USDTSettlementReserve`.
+2. Full settlement is rounded up in the token's native decimals so a user cannot leave dust debt through decimal truncation.
+3. `USDTSettlementReserve` accounts for pending USDT and can release it only through `MARKET_EXECUTOR_ROLE`.
+4. The reserve has no DEX router integration. It does not select pools, routes, quotes, deadlines, or slippage bounds.
+5. ICFT credit inventory remains reduced after a USDT repayment. It is replenished only when canonical ICFT bought externally is returned from the authorized reserve to `LendingPool`.
+
+This is not a production market-execution system. Before enabling it on a public testnet, the team must approve the concrete venue, executor architecture, slippage and quote validation, transaction deadline, maximum trade size, failure handling, key custody, monitoring, and emergency pause procedure.
 
 This approved behavior still requires protection before a market-derived ICFT price is adopted. A manipulated or volatile ICFT oracle can affect repayment token amounts, reserve-token accounting, borrower incentives, and liquidation economics. A production release needs at minimum a robust oracle methodology, price-deviation controls, a TWAP or equivalent where appropriate, and tests covering price movements before and after origination.
 

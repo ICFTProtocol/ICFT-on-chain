@@ -80,6 +80,18 @@ error InvalidManualPrice();
 /// @notice Thrown when collateral asset decimals are unsupported by protocol math.
 error InvalidAssetDecimals();
 
+/// @notice Thrown when the USDT settlement module has not been initialized on the lending pool.
+error USDTSettlementNotConfigured();
+
+/// @notice Thrown when the configured settlement token or reserve does not match the expected protocol wiring.
+error InvalidUSDTSettlementConfiguration();
+
+/// @notice Thrown when a settlement-token transfer delivers less than the requested amount.
+error SettlementTransferMismatch();
+
+/// @notice Thrown when a market executor attempts to release more USDT than the reserve has pending.
+error InsufficientPendingSettlementUSDT();
+
 /// @notice Thrown when risk parameters are inconsistent or unsafe.
 error InvalidRiskParameters();
 
