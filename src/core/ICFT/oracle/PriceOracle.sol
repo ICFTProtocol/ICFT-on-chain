@@ -99,6 +99,8 @@ import {
     InvalidOracleAddress,
     InvalidOracleAnswer,
     IncompleteOracleRound,
+    CollateralPriceBoundsNotConfigured,
+    CollateralPriceOutOfBounds,
     StaleOraclePrice,
     UnsupportedCollateralAsset,
     UnsupportedPriceDecimals
@@ -125,6 +127,12 @@ contract PriceOracle is Initializable, IPriceOracle, AccessControlUpgradeable {
         bool enabled;
     }
 
+    struct CollateralPriceBounds {
+        uint256 minPriceUSD;
+        uint256 maxPriceUSD;
+        bool configured;
+    }
+
     AggregatorV3Interface public ethUsdFeed;
     AggregatorV3Interface public icftUsdFeed;
     PriceSource public icftPriceSource = PriceSource.Manual;
@@ -136,7 +144,9 @@ contract PriceOracle is Initializable, IPriceOracle, AccessControlUpgradeable {
     // collateralFeeds must remain after legacy oracle fields so Sepolia proxy
     // state from the earlier oracle version is interpreted correctly.
     mapping(address => CollateralFeedConfig) internal collateralFeeds;
-    uint256[50] private __gap;
+    // Added after collateralFeeds for proxy-safe V3 storage. The zero address represents native ETH.
+    mapping(address => CollateralPriceBounds) internal collateralPriceBounds;
+    uint256[49] private __gap;
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -164,18 +174,24 @@ contract PriceOracle is Initializable, IPriceOracle, AccessControlUpgradeable {
     }
 
     function getETHUSDPrice() external view returns (uint256) {
-        return _getChainlinkPrice(ethUsdFeed);
+        uint256 price = _getChainlinkPrice(ethUsdFeed);
+        _validateCollateralPrice(address(0), price);
+        return price;
     }
 
     function getAssetUSDPrice(address asset) public view returns (uint256) {
         if (asset == address(0)) {
-            return _getChainlinkPrice(ethUsdFeed);
+            uint256 nativePrice = _getChainlinkPrice(ethUsdFeed);
+            _validateCollateralPrice(asset, nativePrice);
+            return nativePrice;
         }
 
         CollateralFeedConfig memory config = collateralFeeds[asset];
         if (!config.enabled) revert UnsupportedCollateralAsset();
 
-        return _getChainlinkPrice(config.feed);
+        uint256 price = _getChainlinkPrice(config.feed);
+        _validateCollateralPrice(asset, price);
+        return price;
     }
 
     function getAssetDecimals(address asset) public view returns (uint8 decimals) {
@@ -195,6 +211,15 @@ contract PriceOracle is Initializable, IPriceOracle, AccessControlUpgradeable {
         }
 
         return collateralFeeds[asset].enabled;
+    }
+
+    function getCollateralAssetPriceBounds(address asset)
+        external
+        view
+        returns (uint256 minPriceUSD, uint256 maxPriceUSD, bool configured)
+    {
+        CollateralPriceBounds memory bounds = collateralPriceBounds[asset];
+        return (bounds.minPriceUSD, bounds.maxPriceUSD, bounds.configured);
     }
 
     function getICFTUSDPrice() external view returns (uint256) {
@@ -253,6 +278,21 @@ contract PriceOracle is Initializable, IPriceOracle, AccessControlUpgradeable {
         emit NativeUSDFeedUpdated(feed);
     }
 
+    function setCollateralAssetPriceBounds(address asset, uint256 minPriceUSD, uint256 maxPriceUSD)
+        external
+        onlyRole(ORACLE_ADMIN_ROLE)
+    {
+        if (minPriceUSD == 0 || maxPriceUSD < minPriceUSD) revert InvalidManualPrice();
+
+        collateralPriceBounds[asset] = CollateralPriceBounds({
+            minPriceUSD: minPriceUSD,
+            maxPriceUSD: maxPriceUSD,
+            configured: true
+        });
+
+        emit CollateralAssetPriceBoundsUpdated(asset, minPriceUSD, maxPriceUSD);
+    }
+
     function setICFTUSDFeed(address feed) external onlyRole(ORACLE_ADMIN_ROLE) {
         if (feed == address(0)) revert InvalidOracleAddress();
         icftUsdFeed = AggregatorV3Interface(feed);
@@ -265,6 +305,10 @@ contract PriceOracle is Initializable, IPriceOracle, AccessControlUpgradeable {
     {
         if (asset == address(0) || feed == address(0)) revert InvalidOracleAddress();
         if (assetDecimals > 18) revert InvalidAssetDecimals();
+        if (enabled) {
+            uint256 price = _getChainlinkPrice(AggregatorV3Interface(feed));
+            _validateCollateralPrice(asset, price);
+        }
 
         collateralFeeds[asset] =
             CollateralFeedConfig({feed: AggregatorV3Interface(feed), assetDecimals: assetDecimals, enabled: enabled});
@@ -307,6 +351,14 @@ contract PriceOracle is Initializable, IPriceOracle, AccessControlUpgradeable {
         if (block.timestamp > updatedAt + maxPriceAge) revert StaleOraclePrice();
 
         return normalizePrice(uint256(answer), feed.decimals());
+    }
+
+    function _validateCollateralPrice(address asset, uint256 price) internal view {
+        CollateralPriceBounds memory bounds = collateralPriceBounds[asset];
+        if (!bounds.configured) revert CollateralPriceBoundsNotConfigured(asset);
+        if (price < bounds.minPriceUSD || price > bounds.maxPriceUSD) {
+            revert CollateralPriceOutOfBounds(asset, price, bounds.minPriceUSD, bounds.maxPriceUSD);
+        }
     }
 
     function _convertTokenToUSD(uint256 tokenAmount, uint256 tokenPrice) internal pure returns (uint256 usdAmount) {

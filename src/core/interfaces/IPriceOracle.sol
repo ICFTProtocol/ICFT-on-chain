@@ -69,6 +69,9 @@ interface IPriceOracle {
      */
     event CollateralAssetFeedUpdated(address indexed asset, address indexed feed, uint8 assetDecimals, bool enabled);
 
+    /// @notice Emitted when the accepted USD price range for collateral is updated.
+    event CollateralAssetPriceBoundsUpdated(address indexed asset, uint256 minPriceUSD, uint256 maxPriceUSD);
+
     /**
      * @notice Emitted when the maximum accepted oracle staleness window is updated.
      * @param newMaxPriceAge New freshness threshold in seconds.
@@ -101,6 +104,15 @@ interface IPriceOracle {
      * @return supported True when the asset has an active oracle configuration.
      */
     function isCollateralAssetSupported(address asset) external view returns (bool supported);
+
+    /// @notice Returns the accepted USD price range for an asset and whether it is configured.
+    function getCollateralAssetPriceBounds(address asset)
+        external
+        view
+        returns (uint256 minPriceUSD, uint256 maxPriceUSD, bool configured);
+
+    /// @notice Configures the fail-closed USD price range used before an asset price can affect risk calculations.
+    function setCollateralAssetPriceBounds(address asset, uint256 minPriceUSD, uint256 maxPriceUSD) external;
 
     /**
      * @notice Returns the ICFT/USD price normalized to 1e18 precision.

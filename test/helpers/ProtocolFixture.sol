@@ -141,6 +141,9 @@ abstract contract ProtocolFixture is Test {
             )
         );
 
+        oracle.setCollateralAssetPriceBounds(NATIVE_ASSET, 500 ether, 10_000 ether);
+        oracle.setCollateralAssetPriceBounds(address(wbtc), 10_000 ether, 250_000 ether);
+        oracle.setCollateralAssetPriceBounds(address(wsteth), 500 ether, 10_000 ether);
         oracle.setCollateralAssetFeed(address(wbtc), address(wbtcFeed), wbtc.decimals(), true);
         oracle.setCollateralAssetFeed(address(wsteth), address(wstethFeed), wsteth.decimals(), true);
         lendingPool.setCollateralAsset(address(wbtc), true);

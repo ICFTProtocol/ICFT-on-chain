@@ -22,6 +22,8 @@ contract DeployICFTProtocol is Script {
         address asset;
         address usdFeed;
         uint8 assetDecimals;
+        uint256 minPriceUSD;
+        uint256 maxPriceUSD;
         bool enabled;
         string label;
     }
@@ -38,6 +40,8 @@ contract DeployICFTProtocol is Script {
         address ecosystemRecipient;
         address liquidationOperator;
         address ethUsdFeed;
+        uint256 nativeMinPriceUSD;
+        uint256 nativeMaxPriceUSD;
         uint256 maxPriceAge;
         uint256 initialManualICFTPrice;
         uint8 initialManualICFTPriceDecimals;
@@ -134,8 +138,10 @@ contract DeployICFTProtocol is Script {
         if (config.admin == deployer) {
             lendingPool.grantRole(lendingPool.LIQUIDATION_BOT_ROLE(), address(liquidationEngine));
             liquidationEngine.grantRole(liquidationEngine.OPERATOR_ROLE(), config.liquidationOperator);
-            _configureCollateral(lendingPool, PriceOracle(artifacts.oracleProxy), config.wbtcCollateral);
-            _configureCollateral(lendingPool, PriceOracle(artifacts.oracleProxy), config.wstethCollateral);
+            PriceOracle oracle = PriceOracle(artifacts.oracleProxy);
+            oracle.setCollateralAssetPriceBounds(address(0), config.nativeMinPriceUSD, config.nativeMaxPriceUSD);
+            _configureCollateral(lendingPool, oracle, config.wbtcCollateral);
+            _configureCollateral(lendingPool, oracle, config.wstethCollateral);
         }
 
         vm.stopBroadcast();
@@ -172,6 +178,8 @@ contract DeployICFTProtocol is Script {
         config.liquidationOperator = vm.envOr("LIQUIDATION_OPERATOR", deployer);
 
         config.ethUsdFeed = vm.envAddress("ETH_USD_FEED");
+        config.nativeMinPriceUSD = vm.envUint("NATIVE_MIN_PRICE_USD");
+        config.nativeMaxPriceUSD = vm.envUint("NATIVE_MAX_PRICE_USD");
         config.maxPriceAge = vm.envOr("MAX_PRICE_AGE", uint256(1 hours));
         config.initialManualICFTPrice = vm.envOr("INITIAL_MANUAL_ICFT_PRICE", uint256(1e8));
         config.initialManualICFTPriceDecimals = uint8(vm.envOr("INITIAL_MANUAL_ICFT_PRICE_DECIMALS", uint256(8)));
@@ -197,6 +205,8 @@ contract DeployICFTProtocol is Script {
             asset: vm.envOr("WBTC_COLLATERAL_ASSET", address(0)),
             usdFeed: vm.envOr("WBTC_USD_FEED", address(0)),
             assetDecimals: uint8(vm.envOr("WBTC_ASSET_DECIMALS", uint256(8))),
+            minPriceUSD: vm.envOr("WBTC_MIN_PRICE_USD", uint256(0)),
+            maxPriceUSD: vm.envOr("WBTC_MAX_PRICE_USD", uint256(0)),
             enabled: vm.envOr("ENABLE_WBTC_COLLATERAL", false),
             label: "wBTC"
         });
@@ -204,6 +214,8 @@ contract DeployICFTProtocol is Script {
             asset: vm.envOr("WSTETH_COLLATERAL_ASSET", address(0)),
             usdFeed: vm.envOr("WSTETH_USD_FEED", address(0)),
             assetDecimals: uint8(vm.envOr("WSTETH_ASSET_DECIMALS", uint256(18))),
+            minPriceUSD: vm.envOr("WSTETH_MIN_PRICE_USD", uint256(0)),
+            maxPriceUSD: vm.envOr("WSTETH_MAX_PRICE_USD", uint256(0)),
             enabled: vm.envOr("ENABLE_WSTETH_COLLATERAL", false),
             label: "wstETH"
         });
@@ -247,6 +259,8 @@ contract DeployICFTProtocol is Script {
         console2.log(string.concat(collateral.label, " asset"), collateral.asset);
         console2.log(string.concat(collateral.label, " feed"), collateral.usdFeed);
         console2.log(string.concat(collateral.label, " decimals"), uint256(collateral.assetDecimals));
+        console2.log(string.concat(collateral.label, " min USD"), collateral.minPriceUSD);
+        console2.log(string.concat(collateral.label, " max USD"), collateral.maxPriceUSD);
     }
 
     function _configureCollateral(LendingPool lendingPool, PriceOracle oracle, CollateralConfig memory collateral) internal {
@@ -260,6 +274,7 @@ contract DeployICFTProtocol is Script {
             return;
         }
 
+        oracle.setCollateralAssetPriceBounds(collateral.asset, collateral.minPriceUSD, collateral.maxPriceUSD);
         oracle.setCollateralAssetFeed(collateral.asset, collateral.usdFeed, collateral.assetDecimals, true);
         lendingPool.setCollateralAsset(collateral.asset, true);
     }

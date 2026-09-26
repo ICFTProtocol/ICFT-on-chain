@@ -80,6 +80,12 @@ error InvalidManualPrice();
 /// @notice Thrown when collateral asset decimals are unsupported by protocol math.
 error InvalidAssetDecimals();
 
+/// @notice Thrown when a collateral feed is enabled without explicit USD price bounds.
+error CollateralPriceBoundsNotConfigured(address asset);
+
+/// @notice Thrown when a collateral oracle price falls outside its admin-approved USD range.
+error CollateralPriceOutOfBounds(address asset, uint256 price, uint256 minPriceUSD, uint256 maxPriceUSD);
+
 /// @notice Thrown when the USDT settlement module has not been initialized on the lending pool.
 error USDTSettlementNotConfigured();
 

@@ -3,8 +3,13 @@ pragma solidity 0.8.30;
 
 import {ProtocolFixture} from "./helpers/ProtocolFixture.sol";
 import {MockChainlinkFeed} from "../src/mocks/MockChainlinkFeed.sol";
+import {MockERC20} from "../src/mocks/MockERC20.sol";
 import {PriceSource} from "../src/core/utils/PriceSource.sol";
-import {IncompleteOracleRound} from "../src/core/utils/Errors.sol";
+import {
+    CollateralPriceBoundsNotConfigured,
+    CollateralPriceOutOfBounds,
+    IncompleteOracleRound
+} from "../src/core/utils/Errors.sol";
 
 contract PriceOracleTest is ProtocolFixture {
     function setUp() public {
@@ -105,5 +110,42 @@ contract PriceOracleTest is ProtocolFixture {
     function testWstethIsSupportedThroughGenericApi() public view {
         assertTrue(oracle.isCollateralAssetSupported(address(wsteth)));
         assertEq(oracle.getAssetUSDPrice(address(wsteth)), 2_200e18);
+    }
+
+    function testRejectsEnablingCollateralFeedWithOutOfRangePrice() public {
+        MockChainlinkFeed invalidFeed = new MockChainlinkFeed(8, int256(10 ** 28));
+        uint8 assetDecimals = wsteth.decimals();
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                CollateralPriceOutOfBounds.selector, address(wsteth), 10 ** 38, 500 ether, 10_000 ether
+            )
+        );
+        oracle.setCollateralAssetFeed(address(wsteth), address(invalidFeed), assetDecimals, true);
+    }
+
+    function testRejectsEnablingCollateralFeedWithoutConfiguredBounds() public {
+        MockERC20 unboundedAsset = new MockERC20("Unbounded", "UNB", 18);
+        MockChainlinkFeed feed = new MockChainlinkFeed(8, 1e8);
+
+        vm.expectRevert(abi.encodeWithSelector(CollateralPriceBoundsNotConfigured.selector, address(unboundedAsset)));
+        oracle.setCollateralAssetFeed(address(unboundedAsset), address(feed), 18, true);
+    }
+
+    function testOutOfRangeWstethPriceCannotBackAnOversizedBorrow() public {
+        // This matches the Sepolia incident class: a 1e28 answer with eight feed decimals.
+        wstethFeed.setRoundData(int256(10 ** 28), block.timestamp);
+
+        vm.startPrank(alice);
+        wsteth.approve(address(lendingPool), 0.02 ether);
+        lendingPool.depositCollateral(address(wsteth), 0.02 ether);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                CollateralPriceOutOfBounds.selector, address(wsteth), 10 ** 38, 500 ether, 10_000 ether
+            )
+        );
+        lendingPool.borrow(1_000 ether);
+        vm.stopPrank();
     }
 }

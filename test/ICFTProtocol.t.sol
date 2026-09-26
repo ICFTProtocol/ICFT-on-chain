@@ -256,6 +256,7 @@ contract ICFTProtocolTest is ProtocolFixture {
         MockChainlinkFeed feeFeed = new MockChainlinkFeed(8, 1e8);
         uint256 depositAmount = 100 ether;
 
+        oracle.setCollateralAssetPriceBounds(address(feeToken), 0.5 ether, 2 ether);
         oracle.setCollateralAssetFeed(address(feeToken), address(feeFeed), 18, true);
         lendingPool.setCollateralAsset(address(feeToken), true);
         feeToken.mint(alice, depositAmount);
