@@ -104,6 +104,7 @@ import {IRiskEngine} from "../../interfaces/IRiskEngine.sol";
 import {IUSDTSettlementReserve} from "../../interfaces/IUSDTSettlementReserve.sol";
 import {
     BorrowExceedsLTV,
+    BorrowAmountExceedsTransactionCap,
     BorrowBelowMinimum,
     BorrowingDisabledAtUtilization,
     CollateralAssetLimitReached,
@@ -158,6 +159,7 @@ contract LendingPool is
     uint256 public constant INDEX_SCALE = 1e18;
     uint256 public constant DEFAULT_INSURANCE_RESERVE_BPS = 1_500;
     uint256 public constant DEFAULT_MIN_BORROW_USD = 100e18;
+    uint256 public constant DEFAULT_MAX_BORROW_PER_TRANSACTION_BPS = 500;
     uint256 public constant MAX_COLLATERAL_ASSETS = 16;
     address internal constant NATIVE_ASSET = address(0);
 
@@ -211,7 +213,10 @@ contract LendingPool is
     IERC20 public usdtSettlementAsset;
     IUSDTSettlementReserve public usdtSettlementReserve;
     uint8 public usdtSettlementAssetDecimals;
-    uint256[40] private __gap;
+    // V5 security circuit breaker. The value is measured against Fund A's
+    // principal allocation, so a single transaction cannot drain the reserve.
+    uint256 public maxBorrowPerTransactionBps;
+    uint256[39] private __gap;
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -253,6 +258,7 @@ contract LendingPool is
         lastAccrualTime = block.timestamp;
         insuranceReserveBps = DEFAULT_INSURANCE_RESERVE_BPS;
         minimumBorrowUSD = DEFAULT_MIN_BORROW_USD;
+        maxBorrowPerTransactionBps = DEFAULT_MAX_BORROW_PER_TRANSACTION_BPS;
 
         _setCollateralAsset(NATIVE_ASSET, true, true);
     }
@@ -270,6 +276,12 @@ contract LendingPool is
 
         insuranceReserveBps = DEFAULT_INSURANCE_RESERVE_BPS;
         minimumBorrowUSD = DEFAULT_MIN_BORROW_USD;
+    }
+
+    /// @notice Initializes the per-transaction borrow circuit breaker on an existing proxy.
+    function initializeBorrowLimitV5() external reinitializer(5) onlyRole(CONFIG_ADMIN_ROLE) {
+        maxBorrowPerTransactionBps = DEFAULT_MAX_BORROW_PER_TRANSACTION_BPS;
+        emit ParameterUpdated(keccak256("maxBorrowPerTransactionBps"), maxBorrowPerTransactionBps);
     }
 
     /**
@@ -361,6 +373,11 @@ contract LendingPool is
 
         uint256 availableLiquidity = getAvailableLiquidity();
         if (amountICFT > availableLiquidity) revert InsufficientLiquidity();
+
+        uint256 maxBorrowPerTransaction = (fundAAllocation * maxBorrowPerTransactionBps) / BPS;
+        if (amountICFT > maxBorrowPerTransaction) {
+            revert BorrowAmountExceedsTransactionCap(amountICFT, maxBorrowPerTransaction);
+        }
 
         uint256 projectedUtilization = _calculateUtilizationAfterBorrow(amountICFT);
         if (projectedUtilization >= interestRateModel.getMaxBorrowUtilizationBps()) {
@@ -547,6 +564,17 @@ contract LendingPool is
 
         minimumBorrowUSD = newMinimumBorrowUSD;
         emit ParameterUpdated(keccak256("minimumBorrowUSD"), newMinimumBorrowUSD);
+    }
+
+    /// @notice Sets the maximum ICFT amount one borrow transaction can draw, as a share of Fund A.
+    function setMaxBorrowPerTransactionBps(uint256 newMaxBorrowPerTransactionBps)
+        external
+        onlyRole(CONFIG_ADMIN_ROLE)
+    {
+        if (newMaxBorrowPerTransactionBps == 0 || newMaxBorrowPerTransactionBps > BPS) revert InvalidBps();
+
+        maxBorrowPerTransactionBps = newMaxBorrowPerTransactionBps;
+        emit ParameterUpdated(keccak256("maxBorrowPerTransactionBps"), newMaxBorrowPerTransactionBps);
     }
 
     /// @notice Pulls ICFT supplied by the authorized LP vault into lendable pool liquidity.

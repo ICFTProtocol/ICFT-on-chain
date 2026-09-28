@@ -14,6 +14,7 @@ import {IInterestRateModel} from "../src/core/interfaces/IInterestRateModel.sol"
 import {MockChainlinkFeed} from "../src/mocks/MockChainlinkFeed.sol";
 import {FeeOnTransferMockERC20} from "../src/mocks/FeeOnTransferMockERC20.sol";
 import {
+    BorrowAmountExceedsTransactionCap,
     BorrowExceedsLTV,
     BorrowingDisabledAtUtilization,
     DirectETHTransfersDisabled,
@@ -119,6 +120,8 @@ contract ICFTProtocolTest is ProtocolFixture {
     function testAccrualUsesOldUtilizationBeforeNewBorrowChangesIt() public {
         vm.deal(alice, 30_000 ether);
         vm.deal(bob, 80_000 ether);
+
+        lendingPool.setMaxBorrowPerTransactionBps(10_000);
 
         vm.startPrank(alice);
         lendingPool.depositCollateral{value: 25_000 ether}();
@@ -324,6 +327,28 @@ contract ICFTProtocolTest is ProtocolFixture {
         lendingPool.borrow(FUND_A);
     }
 
+    function testBorrowRejectsAmountAboveDefaultFivePercentFundALimit() public {
+        vm.deal(alice, 10_000 ether);
+        vm.prank(alice);
+        lendingPool.depositCollateral{value: 10_000 ether}();
+
+        uint256 limit = (FUND_A * 500) / 10_000;
+        vm.prank(alice);
+        vm.expectRevert(
+            abi.encodeWithSelector(BorrowAmountExceedsTransactionCap.selector, limit + 1, limit)
+        );
+        lendingPool.borrow(limit + 1);
+    }
+
+    function testBorrowLimitCanOnlyBeUpdatedByConfigAdmin() public {
+        vm.prank(alice);
+        vm.expectRevert();
+        lendingPool.setMaxBorrowPerTransactionBps(1_000);
+
+        lendingPool.setMaxBorrowPerTransactionBps(1_000);
+        assertEq(lendingPool.maxBorrowPerTransactionBps(), 1_000);
+    }
+
     function testBorrowRejectsAtUtilizationCap() public {
         IInterestRateModel.RateConfig memory config = IInterestRateModel.RateConfig({
             kink1Bps: 5_000,
@@ -376,6 +401,7 @@ contract ICFTProtocolTest is ProtocolFixture {
         );
 
         smallIcft.transfer(address(isolatedSmallPool), 1_000 ether);
+        isolatedSmallPool.setMaxBorrowPerTransactionBps(10_000);
 
         vm.deal(alice, 2 ether);
         vm.prank(alice);

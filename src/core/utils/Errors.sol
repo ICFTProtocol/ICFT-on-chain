@@ -119,6 +119,9 @@ error InsufficientLiquidity();
 /// @notice Thrown when borrowing would push utilization above the configured cap.
 error BorrowingDisabledAtUtilization();
 
+/// @notice Thrown when a single borrow exceeds the configured Fund A circuit-breaker limit.
+error BorrowAmountExceedsTransactionCap(uint256 requestedICFT, uint256 maxAllowedICFT);
+
 /// @notice Thrown when an operation requires outstanding debt but none exists.
 error NoDebt();
 
