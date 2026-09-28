@@ -16,6 +16,7 @@ import {FeeOnTransferMockERC20} from "../src/mocks/FeeOnTransferMockERC20.sol";
 import {
     BorrowAmountExceedsTransactionCap,
     BorrowExceedsLTV,
+    BorrowWindowLimitExceeded,
     BorrowingDisabledAtUtilization,
     DirectETHTransfersDisabled,
     InsufficientCollateral,
@@ -122,6 +123,7 @@ contract ICFTProtocolTest is ProtocolFixture {
         vm.deal(bob, 80_000 ether);
 
         lendingPool.setMaxBorrowPerTransactionBps(10_000);
+        lendingPool.setBorrowWindowLimit(10_000, 1 days);
 
         vm.startPrank(alice);
         lendingPool.depositCollateral{value: 25_000 ether}();
@@ -345,8 +347,34 @@ contract ICFTProtocolTest is ProtocolFixture {
         vm.expectRevert();
         lendingPool.setMaxBorrowPerTransactionBps(1_000);
 
+        vm.prank(alice);
+        vm.expectRevert();
+        lendingPool.setBorrowWindowLimit(1_000, 1 days);
+
         lendingPool.setMaxBorrowPerTransactionBps(1_000);
         assertEq(lendingPool.maxBorrowPerTransactionBps(), 1_000);
+
+        lendingPool.setBorrowWindowLimit(1_000, 2 days);
+        assertEq(lendingPool.maxBorrowPerWindowBps(), 1_000);
+        assertEq(lendingPool.borrowWindowDuration(), 2 days);
+    }
+
+    function testBorrowWindowRejectsAggregateDrawsAboveFivePercentFundA() public {
+        uint256 draw = (FUND_A * 300) / 10_000;
+        lendingPool.setMaxBorrowPerTransactionBps(10_000);
+
+        vm.deal(alice, 4_000 ether);
+        vm.prank(alice);
+        lendingPool.depositCollateral{value: 4_000 ether}();
+        vm.prank(alice);
+        lendingPool.borrow(draw);
+
+        vm.deal(bob, 4_000 ether);
+        vm.prank(bob);
+        lendingPool.depositCollateral{value: 4_000 ether}();
+        vm.prank(bob);
+        vm.expectRevert(abi.encodeWithSelector(BorrowWindowLimitExceeded.selector, draw, (FUND_A * 200) / 10_000));
+        lendingPool.borrow(draw);
     }
 
     function testBorrowRejectsAtUtilizationCap() public {
@@ -402,6 +430,7 @@ contract ICFTProtocolTest is ProtocolFixture {
 
         smallIcft.transfer(address(isolatedSmallPool), 1_000 ether);
         isolatedSmallPool.setMaxBorrowPerTransactionBps(10_000);
+        isolatedSmallPool.setBorrowWindowLimit(10_000, 1 days);
 
         vm.deal(alice, 2 ether);
         vm.prank(alice);

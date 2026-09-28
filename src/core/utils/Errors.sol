@@ -122,6 +122,9 @@ error BorrowingDisabledAtUtilization();
 /// @notice Thrown when a single borrow exceeds the configured Fund A circuit-breaker limit.
 error BorrowAmountExceedsTransactionCap(uint256 requestedICFT, uint256 maxAllowedICFT);
 
+/// @notice Thrown when aggregate borrows exceed the configured Fund A window limit.
+error BorrowWindowLimitExceeded(uint256 requestedICFT, uint256 remainingICFT);
+
 /// @notice Thrown when an operation requires outstanding debt but none exists.
 error NoDebt();
 

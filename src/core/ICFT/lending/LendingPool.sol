@@ -105,6 +105,7 @@ import {IUSDTSettlementReserve} from "../../interfaces/IUSDTSettlementReserve.so
 import {
     BorrowExceedsLTV,
     BorrowAmountExceedsTransactionCap,
+    BorrowWindowLimitExceeded,
     BorrowBelowMinimum,
     BorrowingDisabledAtUtilization,
     CollateralAssetLimitReached,
@@ -160,6 +161,8 @@ contract LendingPool is
     uint256 public constant DEFAULT_INSURANCE_RESERVE_BPS = 1_500;
     uint256 public constant DEFAULT_MIN_BORROW_USD = 100e18;
     uint256 public constant DEFAULT_MAX_BORROW_PER_TRANSACTION_BPS = 500;
+    uint256 public constant DEFAULT_MAX_BORROW_PER_WINDOW_BPS = 500;
+    uint256 public constant DEFAULT_BORROW_WINDOW_DURATION = 1 days;
     uint256 public constant MAX_COLLATERAL_ASSETS = 16;
     address internal constant NATIVE_ASSET = address(0);
 
@@ -216,7 +219,11 @@ contract LendingPool is
     // V5 security circuit breaker. The value is measured against Fund A's
     // principal allocation, so a single transaction cannot drain the reserve.
     uint256 public maxBorrowPerTransactionBps;
-    uint256[39] private __gap;
+    uint256 public maxBorrowPerWindowBps;
+    uint256 public borrowWindowDuration;
+    uint256 public borrowWindowStart;
+    uint256 public borrowedInCurrentWindow;
+    uint256[35] private __gap;
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -259,6 +266,9 @@ contract LendingPool is
         insuranceReserveBps = DEFAULT_INSURANCE_RESERVE_BPS;
         minimumBorrowUSD = DEFAULT_MIN_BORROW_USD;
         maxBorrowPerTransactionBps = DEFAULT_MAX_BORROW_PER_TRANSACTION_BPS;
+        maxBorrowPerWindowBps = DEFAULT_MAX_BORROW_PER_WINDOW_BPS;
+        borrowWindowDuration = DEFAULT_BORROW_WINDOW_DURATION;
+        borrowWindowStart = block.timestamp;
 
         _setCollateralAsset(NATIVE_ASSET, true, true);
     }
@@ -281,7 +291,12 @@ contract LendingPool is
     /// @notice Initializes the per-transaction borrow circuit breaker on an existing proxy.
     function initializeBorrowLimitV5() external reinitializer(5) onlyRole(CONFIG_ADMIN_ROLE) {
         maxBorrowPerTransactionBps = DEFAULT_MAX_BORROW_PER_TRANSACTION_BPS;
+        maxBorrowPerWindowBps = DEFAULT_MAX_BORROW_PER_WINDOW_BPS;
+        borrowWindowDuration = DEFAULT_BORROW_WINDOW_DURATION;
+        borrowWindowStart = block.timestamp;
         emit ParameterUpdated(keccak256("maxBorrowPerTransactionBps"), maxBorrowPerTransactionBps);
+        emit ParameterUpdated(keccak256("maxBorrowPerWindowBps"), maxBorrowPerWindowBps);
+        emit ParameterUpdated(keccak256("borrowWindowDuration"), borrowWindowDuration);
     }
 
     /**
@@ -378,6 +393,8 @@ contract LendingPool is
         if (amountICFT > maxBorrowPerTransaction) {
             revert BorrowAmountExceedsTransactionCap(amountICFT, maxBorrowPerTransaction);
         }
+
+        _consumeBorrowWindow(amountICFT);
 
         uint256 projectedUtilization = _calculateUtilizationAfterBorrow(amountICFT);
         if (projectedUtilization >= interestRateModel.getMaxBorrowUtilizationBps()) {
@@ -575,6 +592,23 @@ contract LendingPool is
 
         maxBorrowPerTransactionBps = newMaxBorrowPerTransactionBps;
         emit ParameterUpdated(keccak256("maxBorrowPerTransactionBps"), newMaxBorrowPerTransactionBps);
+    }
+
+    /// @notice Sets the aggregate borrowing circuit breaker for each fixed time window.
+    function setBorrowWindowLimit(uint256 newMaxBorrowPerWindowBps, uint256 newBorrowWindowDuration)
+        external
+        onlyRole(CONFIG_ADMIN_ROLE)
+    {
+        if (newMaxBorrowPerWindowBps == 0 || newMaxBorrowPerWindowBps > BPS) revert InvalidBps();
+        if (newBorrowWindowDuration == 0) revert ZeroAmount();
+
+        maxBorrowPerWindowBps = newMaxBorrowPerWindowBps;
+        borrowWindowDuration = newBorrowWindowDuration;
+        borrowWindowStart = block.timestamp;
+        borrowedInCurrentWindow = 0;
+
+        emit ParameterUpdated(keccak256("maxBorrowPerWindowBps"), newMaxBorrowPerWindowBps);
+        emit ParameterUpdated(keccak256("borrowWindowDuration"), newBorrowWindowDuration);
     }
 
     /// @notice Pulls ICFT supplied by the authorized LP vault into lendable pool liquidity.
@@ -1028,6 +1062,21 @@ contract LendingPool is
         }
 
         return false;
+    }
+
+    function _consumeBorrowWindow(uint256 amountICFT) internal {
+        if (block.timestamp >= borrowWindowStart + borrowWindowDuration) {
+            borrowWindowStart = block.timestamp;
+            borrowedInCurrentWindow = 0;
+        }
+
+        uint256 maxBorrowPerWindow = (fundAAllocation * maxBorrowPerWindowBps) / BPS;
+        uint256 remaining = maxBorrowPerWindow > borrowedInCurrentWindow
+            ? maxBorrowPerWindow - borrowedInCurrentWindow
+            : 0;
+        if (amountICFT > remaining) revert BorrowWindowLimitExceeded(amountICFT, remaining);
+
+        borrowedInCurrentWindow += amountICFT;
     }
 
     function _calculateUtilizationAfterBorrow(uint256 amountICFT) internal view returns (uint256 utilizationBps) {
