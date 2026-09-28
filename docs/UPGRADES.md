@@ -26,7 +26,7 @@ not an upgrade of an existing deployment.
 ## Required Environment Variables
 
 - `RPC_URL`
-- `DEPLOYER_PRIVATE_KEY`
+- `UPGRADE_PRIVATE_KEY` (must resolve to the owner of the selected `ProxyAdmin`)
 - `PROXY_ADMIN_ADDRESS`
 - `PROXY_ADDRESS`
 - `MODULE`
@@ -38,12 +38,14 @@ Optional:
 Use `UPGRADE_CALLDATA` only when the new implementation adds a post-upgrade initializer or migration function.
 If not needed, leave it empty. The script executes this calldata from the broadcaster after the proxy
 implementation is upgraded; it must not be executed by `ProxyAdmin`, because `ProxyAdmin` does not hold
-the protocol's operational roles.
+the protocol's operational roles. A LendingPool migration also requires the upgrade signer to hold its
+`CONFIG_ADMIN_ROLE` and `PAUSER_ROLE`.
 
 ## Dry Run
 
 ```bash
 source .env
+export UPGRADE_PRIVATE_KEY="0x..."
 forge script script/UpgradeICFTModule.s.sol:UpgradeICFTModule \
   --rpc-url "$RPC_URL" \
   -vvvv
@@ -53,6 +55,7 @@ forge script script/UpgradeICFTModule.s.sol:UpgradeICFTModule \
 
 ```bash
 source .env
+export UPGRADE_PRIVATE_KEY="0x..."
 forge script script/UpgradeICFTModule.s.sol:UpgradeICFTModule \
   --rpc-url "$RPC_URL" \
   --broadcast \
@@ -65,6 +68,7 @@ Upgrade the lending pool proxy:
 
 ```bash
 source .env
+export UPGRADE_PRIVATE_KEY="0x..."
 export MODULE=LendingPool
 export PROXY_ADMIN_ADDRESS=<proxy-admin-address>
 export PROXY_ADDRESS=<lending-pool-proxy-address>

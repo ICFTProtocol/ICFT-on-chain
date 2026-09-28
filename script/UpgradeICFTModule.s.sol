@@ -23,17 +23,28 @@ contract UpgradeICFTModule is Script {
     }
 
     function run() external returns (address newImplementation) {
-        uint256 deployerPrivateKey = vm.envUint("DEPLOYER_PRIVATE_KEY");
+        uint256 upgradePrivateKey = vm.envUint("UPGRADE_PRIVATE_KEY");
         UpgradeConfig memory config = _loadConfig();
         bool isLendingPool = keccak256(bytes(config.module)) == keccak256("LendingPool");
         bool hasPostUpgradeCall = config.initCalldata.length != 0;
+        address broadcaster = vm.addr(upgradePrivateKey);
 
-        vm.startBroadcast(deployerPrivateKey);
+        require(ProxyAdmin(config.proxyAdmin).owner() == broadcaster, "upgrade key is not ProxyAdmin owner");
+
+        bool pausedByScript;
+        if (isLendingPool && hasPostUpgradeCall) {
+            LendingPool pool = LendingPool(payable(config.proxy));
+            require(pool.hasRole(pool.CONFIG_ADMIN_ROLE(), broadcaster), "upgrade key lacks config role");
+            require(pool.hasRole(pool.PAUSER_ROLE(), broadcaster), "upgrade key lacks pauser role");
+            pausedByScript = !pool.paused();
+        }
+
+        vm.startBroadcast(upgradePrivateKey);
 
         // ProxyAdmin is the caller of upgradeAndCall, so role-gated migrations must
         // be invoked by the broadcaster after the implementation switch instead.
         // Pausing LendingPool keeps that multi-transaction sequence atomic in practice.
-        if (isLendingPool && hasPostUpgradeCall) {
+        if (pausedByScript) {
             LendingPool(payable(config.proxy)).pause();
         }
 
@@ -47,7 +58,7 @@ contract UpgradeICFTModule is Script {
             if (!success) _revertWith(returndata);
         }
 
-        if (isLendingPool && hasPostUpgradeCall) {
+        if (pausedByScript) {
             LendingPool(payable(config.proxy)).unpause();
         }
 
