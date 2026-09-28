@@ -71,6 +71,9 @@ error IncompleteOracleRound();
 /// @notice Thrown when the oracle price is older than the configured freshness window.
 error StaleOraclePrice();
 
+/// @notice Thrown when a Chainlink feed reports an update timestamp in the future.
+error FutureOracleTimestamp();
+
 /// @notice Thrown when a price feed uses unsupported decimals.
 error UnsupportedPriceDecimals();
 
@@ -119,11 +122,14 @@ error InsufficientLiquidity();
 /// @notice Thrown when borrowing would push utilization above the configured cap.
 error BorrowingDisabledAtUtilization();
 
-/// @notice Thrown when a single borrow exceeds the configured Fund A circuit-breaker limit.
+/// @notice Thrown when a single borrow exceeds the configured live-liquidity circuit-breaker limit.
 error BorrowAmountExceedsTransactionCap(uint256 requestedICFT, uint256 maxAllowedICFT);
 
-/// @notice Thrown when aggregate borrows exceed the configured Fund A window limit.
+/// @notice Thrown when aggregate borrows exceed the configured live-liquidity window limit.
 error BorrowWindowLimitExceeded(uint256 requestedICFT, uint256 remainingICFT);
+
+/// @notice Thrown when authorized LP liquidity exits exceed the configured circuit breaker.
+error LiquidityWithdrawalWindowLimitExceeded(uint256 requestedICFT, uint256 remainingICFT);
 
 /// @notice Thrown when an operation requires outstanding debt but none exists.
 error NoDebt();

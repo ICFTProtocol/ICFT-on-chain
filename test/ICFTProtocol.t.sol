@@ -22,6 +22,7 @@ import {
     InsufficientCollateral,
     InsufficientLiquidity,
     InvalidAddress,
+    LiquidityWithdrawalWindowLimitExceeded,
     NoDebt,
     ZeroAmount
 } from "../src/core/utils/Errors.sol";
@@ -329,16 +330,14 @@ contract ICFTProtocolTest is ProtocolFixture {
         lendingPool.borrow(FUND_A);
     }
 
-    function testBorrowRejectsAmountAboveDefaultFivePercentFundALimit() public {
+    function testBorrowRejectsAmountAboveDefaultFivePercentAvailableLiquidityLimit() public {
         vm.deal(alice, 10_000 ether);
         vm.prank(alice);
         lendingPool.depositCollateral{value: 10_000 ether}();
 
-        uint256 limit = (FUND_A * 500) / 10_000;
+        uint256 limit = (lendingPool.getAvailableLiquidity() * 500) / 10_000;
         vm.prank(alice);
-        vm.expectRevert(
-            abi.encodeWithSelector(BorrowAmountExceedsTransactionCap.selector, limit + 1, limit)
-        );
+        vm.expectRevert(abi.encodeWithSelector(BorrowAmountExceedsTransactionCap.selector, limit + 1, limit));
         lendingPool.borrow(limit + 1);
     }
 
@@ -359,7 +358,7 @@ contract ICFTProtocolTest is ProtocolFixture {
         assertEq(lendingPool.borrowWindowDuration(), 2 days);
     }
 
-    function testBorrowWindowRejectsAggregateDrawsAboveFivePercentFundA() public {
+    function testBorrowWindowRejectsAggregateDrawsAboveFivePercentLiquiditySnapshot() public {
         uint256 draw = (FUND_A * 300) / 10_000;
         lendingPool.setMaxBorrowPerTransactionBps(10_000);
 
@@ -369,12 +368,25 @@ contract ICFTProtocolTest is ProtocolFixture {
         vm.prank(alice);
         lendingPool.borrow(draw);
 
+        uint256 remaining = ((lendingPool.borrowWindowLiquidityBaseline() * 500) / 10_000) - draw;
+
         vm.deal(bob, 4_000 ether);
         vm.prank(bob);
         lendingPool.depositCollateral{value: 4_000 ether}();
         vm.prank(bob);
-        vm.expectRevert(abi.encodeWithSelector(BorrowWindowLimitExceeded.selector, draw, (FUND_A * 200) / 10_000));
+        vm.expectRevert(abi.encodeWithSelector(BorrowWindowLimitExceeded.selector, draw, remaining));
         lendingPool.borrow(draw);
+    }
+
+    function testLiquidityWithdrawalWindowRejectsExitAboveFivePercentLiquiditySnapshot() public {
+        lendingPool.grantRole(lendingPool.LP_VAULT_ROLE(), liquidity);
+
+        uint256 available = lendingPool.getAvailableLiquidity();
+        uint256 limit = (available * 500) / 10_000;
+
+        vm.prank(liquidity);
+        vm.expectRevert(abi.encodeWithSelector(LiquidityWithdrawalWindowLimitExceeded.selector, limit + 1, limit));
+        lendingPool.withdrawLiquidity(liquidity, limit + 1);
     }
 
     function testBorrowRejectsAtUtilizationCap() public {
@@ -395,9 +407,7 @@ contract ICFTProtocolTest is ProtocolFixture {
         InterestRateModel smallRateModel = InterestRateModel(
             address(
                 new TransparentUpgradeableProxy(
-                    address(rateImplementation),
-                    admin,
-                    abi.encodeCall(InterestRateModel.initialize, (admin, config))
+                    address(rateImplementation), admin, abi.encodeCall(InterestRateModel.initialize, (admin, config))
                 )
             )
         );
@@ -408,24 +418,32 @@ contract ICFTProtocolTest is ProtocolFixture {
                 new TransparentUpgradeableProxy(
                     address(smallIcftImplementation),
                     admin,
-                    abi.encodeCall(ICFT.initialize, (admin, liquidity, reserve, futureInvestors, founder, developers, ecosystem))
+                    abi.encodeCall(
+                        ICFT.initialize, (admin, liquidity, reserve, futureInvestors, founder, developers, ecosystem)
+                    )
                 )
             )
         );
 
         LendingPool isolatedSmallPool = LendingPool(
-            payable(
-                address(
+            payable(address(
                     new TransparentUpgradeableProxy(
                         address(poolImplementation),
                         admin,
                         abi.encodeCall(
                             LendingPool.initialize,
-                            (admin, address(smallIcft), address(oracle), address(riskEngine), address(smallRateModel), 1_000 ether, 0)
+                            (
+                                admin,
+                                address(smallIcft),
+                                address(oracle),
+                                address(riskEngine),
+                                address(smallRateModel),
+                                1_000 ether,
+                                0
+                            )
                         )
                     )
-                )
-            )
+                ))
         );
 
         smallIcft.transfer(address(isolatedSmallPool), 1_000 ether);

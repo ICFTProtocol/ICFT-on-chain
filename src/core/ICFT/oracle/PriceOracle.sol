@@ -101,6 +101,7 @@ import {
     IncompleteOracleRound,
     CollateralPriceBoundsNotConfigured,
     CollateralPriceOutOfBounds,
+    FutureOracleTimestamp,
     StaleOraclePrice,
     UnsupportedCollateralAsset,
     UnsupportedPriceDecimals
@@ -160,7 +161,9 @@ contract PriceOracle is Initializable, IPriceOracle, AccessControlUpgradeable {
         uint256 initialManualICFTPrice,
         uint8 initialManualICFTPriceDecimals
     ) external initializer {
-        if (admin == address(0) || ethUsdFeed_ == address(0)) revert InvalidOracleAddress();
+        if (admin == address(0) || ethUsdFeed_ == address(0)) {
+            revert InvalidOracleAddress();
+        }
         if (maxPriceAge_ == 0) revert InvalidManualPrice();
 
         __AccessControl_init();
@@ -284,11 +287,8 @@ contract PriceOracle is Initializable, IPriceOracle, AccessControlUpgradeable {
     {
         if (minPriceUSD == 0 || maxPriceUSD < minPriceUSD) revert InvalidManualPrice();
 
-        collateralPriceBounds[asset] = CollateralPriceBounds({
-            minPriceUSD: minPriceUSD,
-            maxPriceUSD: maxPriceUSD,
-            configured: true
-        });
+        collateralPriceBounds[asset] =
+            CollateralPriceBounds({minPriceUSD: minPriceUSD, maxPriceUSD: maxPriceUSD, configured: true});
 
         emit CollateralAssetPriceBoundsUpdated(asset, minPriceUSD, maxPriceUSD);
     }
@@ -348,6 +348,7 @@ contract PriceOracle is Initializable, IPriceOracle, AccessControlUpgradeable {
 
         if (answer <= 0 || updatedAt == 0) revert InvalidOracleAnswer();
         if (roundId == 0 || answeredInRound < roundId) revert IncompleteOracleRound();
+        if (updatedAt > block.timestamp) revert FutureOracleTimestamp();
         if (block.timestamp > updatedAt + maxPriceAge) revert StaleOraclePrice();
 
         return normalizePrice(uint256(answer), feed.decimals());

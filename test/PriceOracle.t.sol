@@ -8,7 +8,8 @@ import {PriceSource} from "../src/core/utils/PriceSource.sol";
 import {
     CollateralPriceBoundsNotConfigured,
     CollateralPriceOutOfBounds,
-    IncompleteOracleRound
+    IncompleteOracleRound,
+    FutureOracleTimestamp
 } from "../src/core/utils/Errors.sol";
 
 contract PriceOracleTest is ProtocolFixture {
@@ -32,6 +33,12 @@ contract PriceOracleTest is ProtocolFixture {
     function testRevertsOnNegativeEthOracleAnswer() public {
         ethFeed.setRoundData(-1, block.timestamp);
         vm.expectRevert();
+        oracle.getETHUSDPrice();
+    }
+
+    function testRevertsOnFutureEthOracleTimestamp() public {
+        ethFeed.setRoundData(2_000e8, block.timestamp + 1);
+        vm.expectRevert(FutureOracleTimestamp.selector);
         oracle.getETHUSDPrice();
     }
 

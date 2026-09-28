@@ -108,6 +108,7 @@ import {
     BorrowWindowLimitExceeded,
     BorrowBelowMinimum,
     BorrowingDisabledAtUtilization,
+    LiquidityWithdrawalWindowLimitExceeded,
     CollateralAssetLimitReached,
     DirectETHTransfersDisabled,
     InsufficientCollateral,
@@ -163,6 +164,8 @@ contract LendingPool is
     uint256 public constant DEFAULT_MAX_BORROW_PER_TRANSACTION_BPS = 500;
     uint256 public constant DEFAULT_MAX_BORROW_PER_WINDOW_BPS = 500;
     uint256 public constant DEFAULT_BORROW_WINDOW_DURATION = 1 days;
+    uint256 public constant DEFAULT_MAX_LIQUIDITY_WITHDRAWAL_PER_WINDOW_BPS = 500;
+    uint256 public constant DEFAULT_LIQUIDITY_WITHDRAWAL_WINDOW_DURATION = 1 days;
     uint256 public constant MAX_COLLATERAL_ASSETS = 16;
     address internal constant NATIVE_ASSET = address(0);
 
@@ -223,7 +226,15 @@ contract LendingPool is
     uint256 public borrowWindowDuration;
     uint256 public borrowWindowStart;
     uint256 public borrowedInCurrentWindow;
-    uint256[35] private __gap;
+    // V6 circuit breakers are based on the live available-liquidity snapshot,
+    // rather than the historical Fund A allocation.
+    uint256 public borrowWindowLiquidityBaseline;
+    uint256 public maxLiquidityWithdrawalPerWindowBps;
+    uint256 public liquidityWithdrawalWindowDuration;
+    uint256 public liquidityWithdrawalWindowStart;
+    uint256 public liquidityWithdrawalWindowBaseline;
+    uint256 public withdrawnLiquidityInCurrentWindow;
+    uint256[29] private __gap;
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -269,6 +280,9 @@ contract LendingPool is
         maxBorrowPerWindowBps = DEFAULT_MAX_BORROW_PER_WINDOW_BPS;
         borrowWindowDuration = DEFAULT_BORROW_WINDOW_DURATION;
         borrowWindowStart = block.timestamp;
+        maxLiquidityWithdrawalPerWindowBps = DEFAULT_MAX_LIQUIDITY_WITHDRAWAL_PER_WINDOW_BPS;
+        liquidityWithdrawalWindowDuration = DEFAULT_LIQUIDITY_WITHDRAWAL_WINDOW_DURATION;
+        liquidityWithdrawalWindowStart = block.timestamp;
 
         _setCollateralAsset(NATIVE_ASSET, true, true);
     }
@@ -297,6 +311,21 @@ contract LendingPool is
         emit ParameterUpdated(keccak256("maxBorrowPerTransactionBps"), maxBorrowPerTransactionBps);
         emit ParameterUpdated(keccak256("maxBorrowPerWindowBps"), maxBorrowPerWindowBps);
         emit ParameterUpdated(keccak256("borrowWindowDuration"), borrowWindowDuration);
+    }
+
+    /// @notice Initializes V6 dynamic liquidity circuit breakers after upgrading a V5 proxy.
+    function initializeDynamicCircuitBreakersV6() external reinitializer(6) onlyRole(CONFIG_ADMIN_ROLE) {
+        borrowWindowStart = block.timestamp;
+        borrowedInCurrentWindow = 0;
+        borrowWindowLiquidityBaseline = 0;
+        maxLiquidityWithdrawalPerWindowBps = DEFAULT_MAX_LIQUIDITY_WITHDRAWAL_PER_WINDOW_BPS;
+        liquidityWithdrawalWindowDuration = DEFAULT_LIQUIDITY_WITHDRAWAL_WINDOW_DURATION;
+        liquidityWithdrawalWindowStart = block.timestamp;
+        liquidityWithdrawalWindowBaseline = 0;
+        withdrawnLiquidityInCurrentWindow = 0;
+
+        emit ParameterUpdated(keccak256("maxLiquidityWithdrawalPerWindowBps"), maxLiquidityWithdrawalPerWindowBps);
+        emit ParameterUpdated(keccak256("liquidityWithdrawalWindowDuration"), liquidityWithdrawalWindowDuration);
     }
 
     /**
@@ -389,7 +418,7 @@ contract LendingPool is
         uint256 availableLiquidity = getAvailableLiquidity();
         if (amountICFT > availableLiquidity) revert InsufficientLiquidity();
 
-        uint256 maxBorrowPerTransaction = (fundAAllocation * maxBorrowPerTransactionBps) / BPS;
+        uint256 maxBorrowPerTransaction = (availableLiquidity * maxBorrowPerTransactionBps) / BPS;
         if (amountICFT > maxBorrowPerTransaction) {
             revert BorrowAmountExceedsTransactionCap(amountICFT, maxBorrowPerTransaction);
         }
@@ -584,10 +613,7 @@ contract LendingPool is
     }
 
     /// @notice Sets the maximum ICFT amount one borrow transaction can draw, as a share of Fund A.
-    function setMaxBorrowPerTransactionBps(uint256 newMaxBorrowPerTransactionBps)
-        external
-        onlyRole(CONFIG_ADMIN_ROLE)
-    {
+    function setMaxBorrowPerTransactionBps(uint256 newMaxBorrowPerTransactionBps) external onlyRole(CONFIG_ADMIN_ROLE) {
         if (newMaxBorrowPerTransactionBps == 0 || newMaxBorrowPerTransactionBps > BPS) revert InvalidBps();
 
         maxBorrowPerTransactionBps = newMaxBorrowPerTransactionBps;
@@ -606,9 +632,28 @@ contract LendingPool is
         borrowWindowDuration = newBorrowWindowDuration;
         borrowWindowStart = block.timestamp;
         borrowedInCurrentWindow = 0;
+        borrowWindowLiquidityBaseline = 0;
 
         emit ParameterUpdated(keccak256("maxBorrowPerWindowBps"), newMaxBorrowPerWindowBps);
         emit ParameterUpdated(keccak256("borrowWindowDuration"), newBorrowWindowDuration);
+    }
+
+    /// @notice Limits aggregate Fund A exits to a percentage of the live liquidity snapshot per window.
+    function setLiquidityWithdrawalWindowLimit(uint256 newMaxWithdrawalBps, uint256 newWindowDuration)
+        external
+        onlyRole(CONFIG_ADMIN_ROLE)
+    {
+        if (newMaxWithdrawalBps == 0 || newMaxWithdrawalBps > BPS) revert InvalidBps();
+        if (newWindowDuration == 0) revert ZeroAmount();
+
+        maxLiquidityWithdrawalPerWindowBps = newMaxWithdrawalBps;
+        liquidityWithdrawalWindowDuration = newWindowDuration;
+        liquidityWithdrawalWindowStart = block.timestamp;
+        liquidityWithdrawalWindowBaseline = 0;
+        withdrawnLiquidityInCurrentWindow = 0;
+
+        emit ParameterUpdated(keccak256("maxLiquidityWithdrawalPerWindowBps"), newMaxWithdrawalBps);
+        emit ParameterUpdated(keccak256("liquidityWithdrawalWindowDuration"), newWindowDuration);
     }
 
     /// @notice Pulls ICFT supplied by the authorized LP vault into lendable pool liquidity.
@@ -627,6 +672,7 @@ contract LendingPool is
         if (recipient == address(0)) revert InvalidAddress();
         if (amount == 0) revert ZeroAmount();
         if (amount > getAvailableLiquidity()) revert InsufficientLiquidity();
+        _consumeLiquidityWithdrawalWindow(amount);
 
         fundAAllocation -= amount;
         fundALiquidityICFT -= amount;
@@ -1068,15 +1114,36 @@ contract LendingPool is
         if (block.timestamp >= borrowWindowStart + borrowWindowDuration) {
             borrowWindowStart = block.timestamp;
             borrowedInCurrentWindow = 0;
+            borrowWindowLiquidityBaseline = 0;
         }
 
-        uint256 maxBorrowPerWindow = (fundAAllocation * maxBorrowPerWindowBps) / BPS;
-        uint256 remaining = maxBorrowPerWindow > borrowedInCurrentWindow
-            ? maxBorrowPerWindow - borrowedInCurrentWindow
-            : 0;
+        if (borrowWindowLiquidityBaseline == 0) {
+            borrowWindowLiquidityBaseline = getAvailableLiquidity();
+        }
+        uint256 maxBorrowPerWindow = (borrowWindowLiquidityBaseline * maxBorrowPerWindowBps) / BPS;
+        uint256 remaining =
+            maxBorrowPerWindow > borrowedInCurrentWindow ? maxBorrowPerWindow - borrowedInCurrentWindow : 0;
         if (amountICFT > remaining) revert BorrowWindowLimitExceeded(amountICFT, remaining);
 
         borrowedInCurrentWindow += amountICFT;
+    }
+
+    function _consumeLiquidityWithdrawalWindow(uint256 amountICFT) internal {
+        if (block.timestamp >= liquidityWithdrawalWindowStart + liquidityWithdrawalWindowDuration) {
+            liquidityWithdrawalWindowStart = block.timestamp;
+            liquidityWithdrawalWindowBaseline = 0;
+            withdrawnLiquidityInCurrentWindow = 0;
+        }
+
+        if (liquidityWithdrawalWindowBaseline == 0) {
+            liquidityWithdrawalWindowBaseline = getAvailableLiquidity();
+        }
+        uint256 maxWithdrawal = (liquidityWithdrawalWindowBaseline * maxLiquidityWithdrawalPerWindowBps) / BPS;
+        uint256 remaining =
+            maxWithdrawal > withdrawnLiquidityInCurrentWindow ? maxWithdrawal - withdrawnLiquidityInCurrentWindow : 0;
+        if (amountICFT > remaining) revert LiquidityWithdrawalWindowLimitExceeded(amountICFT, remaining);
+
+        withdrawnLiquidityInCurrentWindow += amountICFT;
     }
 
     function _calculateUtilizationAfterBorrow(uint256 amountICFT) internal view returns (uint256 utilizationBps) {
