@@ -28,14 +28,12 @@ Older whitepaper and tokenomics files remain historical context. Where they diff
 - Fund A ICFT inventory and utilization-based borrowing limits.
 - USD-denominated debt accounting.
 - ICFT repayment using the current configured ICFT/USD price.
-- Optional USDT repayment through an upgradeable settlement reserve. USDT is held pending market execution;
-  it does not immediately recreate ICFT credit inventory.
-- A role-gated path to return market-bought canonical ICFT to Fund A credit inventory after settlement.
-- ETH, wBTC, and wstETH collateral for the current testnet baseline.
+- ETH and wBTC collateral, guarded by a fresh Chainlink answer and explicit asset-level USD price bounds.
 - Interest accrual, risk limits, liquidations, insurance accounting, upgradeable modules, frontend borrower flows, and a dry-run keeper.
 
 ### Not Implemented Yet
 
+- The USDT settlement reserve and user-facing USDT repayment flow are implemented in source but not deployed in the fresh Sepolia release.
 - An approved ICFT/USDT market purchase executor. The current reserve deliberately has no embedded DEX router,
   route, quote, deadline, slippage policy, or automated buyback execution.
 - An approved ICFT/USDT market venue, protocol-provided ICFT market liquidity, and external-USDT-LP integration.
@@ -45,6 +43,13 @@ Older whitepaper and tokenomics files remain historical context. Where they diff
 - Market-depth, position-size, and slippage controls tied to actual ICFT trading liquidity.
 - Whitepaper-defined maturity, overdue penalties, and the full USDT settlement rules.
 - Governance, multisig/timelock, production risk controls, formal audit remediation, and mainnet readiness.
+
+## Fresh Sepolia Release
+
+The legacy Sepolia LendingPool was paused after the wstETH oracle incident and must not be used for demonstrations.
+The current Sepolia deployment begins at block `11799163` and exposes only native ETH and wBTC collateral. `wstETH`
+is deliberately disabled until a verified feed and a separate risk review are approved. The current ICFT/USD
+settlement price is a manual `$1` bootstrap value; it is not an ICFT/USDT TWAP.
 
 ## Engineering Order
 

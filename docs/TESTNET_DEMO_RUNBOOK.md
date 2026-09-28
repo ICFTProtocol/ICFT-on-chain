@@ -8,7 +8,7 @@ This runbook is the shared release checklist for developers, testers, and demo h
 
 | Component | Repository | Role |
 | --- | --- | --- |
-| Smart contracts | `ICFT-on-chain` | Upgradeable lending, risk, oracle, liquidation, and LP-vault contracts. |
+| Smart contracts | `ICFT-on-chain` | Upgradeable lending, risk, oracle, and liquidation contracts. |
 | Frontend | `ICFT_Frontend` | Public site and wallet-connected Sepolia dApp. |
 | Keeper | `ICFT_Backend_Bot` | Private dry-run liquidation monitoring worker. |
 
@@ -18,13 +18,13 @@ This runbook is the shared release checklist for developers, testers, and demo h
 2. `npm run build` passes in the frontend and keeper repositories.
 3. Frontend environment contains only public `NEXT_PUBLIC_*` values and valid Sepolia proxy addresses.
 4. The keeper has `EXECUTION_ENABLED=false`.
-5. Two dedicated test wallets are funded: one with ICFT for the LP flow and one with Sepolia ETH for collateral and gas.
+5. One dedicated borrower wallet has Sepolia ETH for collateral and gas. It may receive a small amount of the current-deployment ICFT only to cover accrued interest during a full repayment.
 6. No administrator, deployer, treasury, or mainnet wallet is connected to the public dApp during a demo.
 
 ## Demo Sequence
 
 1. Show `/status` and the Ethereum Sepolia network.
-2. LP: supply a small ICFT amount, then redeem a small `icftLP` amount.
+2. Open the dApp Markets view: ETH and wBTC are the supported collateral assets. `wstETH` must not be shown as active collateral.
 3. Borrower: deposit ETH, borrow at least the `$100` minimum, partially repay, fully repay, then withdraw ETH.
 4. Demonstrate the intentional unsafe-withdraw revert while debt is active.
 5. Show the keeper log and state file indexing the borrower. No liquidation candidate is expected for a healthy position.
@@ -34,7 +34,8 @@ This runbook is the shared release checklist for developers, testers, and demo h
 - Mainnet readiness or audited production security.
 - A live ICFT market, automatic buyback, burn, market making, or price stability.
 - Autonomous profitable liquidations. The keeper currently monitors in dry-run mode.
-- Public faucet availability for the configured wBTC/wstETH test assets.
+- A live ICFT/USDT market, Uniswap route, USDT repayment, self-liquidation, automatic collateral sale, or keeper DEX execution.
+- Public faucet availability for the configured wBTC test asset.
 
 ## Incident Response
 
