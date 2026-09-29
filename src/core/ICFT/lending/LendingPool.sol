@@ -108,6 +108,7 @@ import {
     BorrowWindowLimitExceeded,
     BorrowBelowMinimum,
     BorrowingDisabledAtUtilization,
+    BorrowingPaused,
     LiquidityWithdrawalWindowLimitExceeded,
     CollateralAssetLimitReached,
     DirectETHTransfersDisabled,
@@ -124,6 +125,7 @@ import {
     SlippageExceeded,
     SettlementTransferMismatch,
     UnsupportedCollateralAsset,
+    USDTSettlementAlreadyConfigured,
     USDTSettlementNotConfigured,
     ZeroCollateralReceived,
     ZeroAmount
@@ -234,7 +236,9 @@ contract LendingPool is
     uint256 public liquidityWithdrawalWindowStart;
     uint256 public liquidityWithdrawalWindowBaseline;
     uint256 public withdrawnLiquidityInCurrentWindow;
-    uint256[29] private __gap;
+    // V7 keeps an emergency borrow-only circuit breaker separate from the full pool pause.
+    bool public borrowingPaused;
+    uint256[28] private __gap;
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -328,6 +332,11 @@ contract LendingPool is
         emit ParameterUpdated(keccak256("liquidityWithdrawalWindowDuration"), liquidityWithdrawalWindowDuration);
     }
 
+    /// @notice Initializes the V7 borrow-only emergency circuit breaker on an existing pool proxy.
+    function initializeBorrowPauseV7() external reinitializer(7) onlyRole(CONFIG_ADMIN_ROLE) {
+        borrowingPaused = false;
+    }
+
     /**
      * @notice Configures USDT as an optional settlement path for existing USD-denominated debt.
      * @dev The reserve must be bound to this pool and the same ERC20 asset. USDT funds are not
@@ -340,6 +349,20 @@ contract LendingPool is
         reinitializer(4)
         onlyRole(CONFIG_ADMIN_ROLE)
     {
+        _configureUSDTSettlement(settlementAsset_, settlementReserve_);
+    }
+
+    /// @notice Binds the optional settlement module on pools whose V4 reinitializer was already consumed.
+    /// @dev One-time configuration guarded by protocol governance; it does not require a new initializer version.
+    function configureUSDTSettlement(address settlementAsset_, address settlementReserve_)
+        external
+        onlyRole(CONFIG_ADMIN_ROLE)
+    {
+        if (address(usdtSettlementReserve) != address(0)) revert USDTSettlementAlreadyConfigured();
+        _configureUSDTSettlement(settlementAsset_, settlementReserve_);
+    }
+
+    function _configureUSDTSettlement(address settlementAsset_, address settlementReserve_) internal {
         if (settlementAsset_ == address(0) || settlementReserve_ == address(0)) {
             revert InvalidUSDTSettlementConfiguration();
         }
@@ -411,6 +434,7 @@ contract LendingPool is
 
     function borrow(uint256 amountICFT) external nonReentrant whenNotPaused {
         if (amountICFT == 0) revert ZeroAmount();
+        if (borrowingPaused) revert BorrowingPaused();
 
         Position storage position = positions[msg.sender];
         uint256 currentDebtUSD = _syncPosition(position, msg.sender);
@@ -589,6 +613,12 @@ contract LendingPool is
         lastAccrualTime = block.timestamp;
         pausedAt = 0;
         _unpause();
+    }
+
+    /// @notice Pauses only new borrow operations; repayment and liquidation continue to protect the protocol.
+    function setBorrowingPaused(bool paused_) external onlyRole(PAUSER_ROLE) {
+        borrowingPaused = paused_;
+        emit ParameterUpdated(keccak256("borrowingPaused"), paused_ ? 1 : 0);
     }
 
     function setLiquidityBuffer(uint256 newLiquidityBuffer) external onlyRole(CONFIG_ADMIN_ROLE) {
@@ -829,12 +859,15 @@ contract LendingPool is
         uint256 currentBalance = _getCollateralBalanceStorage(user, position, asset);
         if (amount > currentBalance) revert InsufficientCollateral();
 
-        uint256 currentCollateralValueUSD = _getCollateralValueUSD(user, position);
-        uint256 withdrawnValueUSD = riskEngine.getCollateralValueUSD(asset, amount);
-        uint256 remainingCollateralValueUSD =
-            currentCollateralValueUSD > withdrawnValueUSD ? currentCollateralValueUSD - withdrawnValueUSD : 0;
-
         if (currentDebtUSD > 0) {
+            uint256 currentCollateralValueUSD = _getCollateralValueUSD(user, position);
+            // Disabled assets are conservatively worth zero for debt-bearing positions.
+            // They can still be exited if the remaining enabled collateral covers the debt.
+            uint256 withdrawnValueUSD = collateralAssets[asset].enabled
+                ? riskEngine.getCollateralValueUSD(asset, amount)
+                : 0;
+            uint256 remainingCollateralValueUSD =
+                currentCollateralValueUSD > withdrawnValueUSD ? currentCollateralValueUSD - withdrawnValueUSD : 0;
             uint256 resultingLtv = riskEngine.calculateLTV(remainingCollateralValueUSD, currentDebtUSD);
             if (resultingLtv > riskEngine.getMaxLTVBps()) revert BorrowExceedsLTV();
         }
@@ -1021,6 +1054,9 @@ contract LendingPool is
 
         for (uint256 i = 0; i < assetsLength; ++i) {
             address asset = supportedCollateralAssets[i];
+            if (!collateralAssets[asset].enabled) {
+                continue;
+            }
             uint256 balance = _getCollateralBalanceMemory(user, position, asset);
 
             if (balance == 0) {
@@ -1205,9 +1241,11 @@ contract LendingPool is
         }
 
         uint256 badDebtUSD = _debtFromScaled(position.scaledDebtUSD, borrowIndex);
-        uint256 badDebtICFT = priceOracle.convertUSDToICFT(badDebtUSD, true);
-        uint256 insuranceUsedICFT = badDebtICFT < protocolRevenueICFT ? badDebtICFT : protocolRevenueICFT;
-        uint256 uncoveredLossICFT = badDebtICFT - insuranceUsedICFT;
+        uint256 outstandingPrincipalICFT = issuedPrincipalICFT[user];
+        uint256 insuranceUsedICFT = outstandingPrincipalICFT < protocolRevenueICFT
+            ? outstandingPrincipalICFT
+            : protocolRevenueICFT;
+        uint256 uncoveredLossICFT = outstandingPrincipalICFT - insuranceUsedICFT;
 
         protocolRevenueICFT -= insuranceUsedICFT;
         fundALiquidityICFT += insuranceUsedICFT;

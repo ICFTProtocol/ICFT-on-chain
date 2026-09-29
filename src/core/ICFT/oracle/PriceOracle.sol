@@ -102,6 +102,7 @@ import {
     CollateralPriceBoundsNotConfigured,
     CollateralPriceOutOfBounds,
     FutureOracleTimestamp,
+    ManualPriceDeviationExceeded,
     StaleOraclePrice,
     UnsupportedCollateralAsset,
     UnsupportedPriceDecimals
@@ -147,7 +148,12 @@ contract PriceOracle is Initializable, IPriceOracle, AccessControlUpgradeable {
     mapping(address => CollateralFeedConfig) internal collateralFeeds;
     // Added after collateralFeeds for proxy-safe V3 storage. The zero address represents native ETH.
     mapping(address => CollateralPriceBounds) internal collateralPriceBounds;
-    uint256[49] private __gap;
+    // V7 governance guardrail for the manual MVP ICFT price.
+    uint256 public maxManualICFTPriceDeviationBps;
+    uint256[48] private __gap;
+
+    uint256 public constant DEFAULT_MAX_MANUAL_ICFT_PRICE_DEVIATION_BPS = 500;
+    uint256 public constant BPS = 10_000;
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -180,6 +186,11 @@ contract PriceOracle is Initializable, IPriceOracle, AccessControlUpgradeable {
         uint256 price = _getChainlinkPrice(ethUsdFeed);
         _validateCollateralPrice(address(0), price);
         return price;
+    }
+
+    /// @notice Initializes the V7 manual-price guard on an existing oracle proxy.
+    function initializeManualPriceGuardV7() external reinitializer(7) onlyRole(ORACLE_ADMIN_ROLE) {
+        maxManualICFTPriceDeviationBps = DEFAULT_MAX_MANUAL_ICFT_PRICE_DEVIATION_BPS;
     }
 
     function getAssetUSDPrice(address asset) public view returns (uint256) {
@@ -274,6 +285,11 @@ contract PriceOracle is Initializable, IPriceOracle, AccessControlUpgradeable {
         _setManualICFTPrice(price, decimals_);
     }
 
+    function setMaxManualICFTPriceDeviationBps(uint256 newMaxDeviationBps) external onlyRole(ORACLE_ADMIN_ROLE) {
+        if (newMaxDeviationBps == 0 || newMaxDeviationBps > BPS) revert InvalidManualPrice();
+        maxManualICFTPriceDeviationBps = newMaxDeviationBps;
+    }
+
     function setNativeUSDFeed(address feed) external onlyRole(ORACLE_ADMIN_ROLE) {
         if (feed == address(0)) revert InvalidOracleAddress();
 
@@ -335,10 +351,19 @@ contract PriceOracle is Initializable, IPriceOracle, AccessControlUpgradeable {
         if (price == 0) revert InvalidManualPrice();
         if (decimals_ > 18) revert UnsupportedPriceDecimals();
 
+        uint256 normalizedPrice = normalizePrice(price, decimals_);
+        if (maxManualICFTPriceDeviationBps != 0 && manualICFTPrice != 0) {
+            uint256 currentPrice = normalizePrice(manualICFTPrice, manualICFTPriceDecimals);
+            uint256 difference = normalizedPrice > currentPrice ? normalizedPrice - currentPrice : currentPrice - normalizedPrice;
+            if ((difference * BPS) / currentPrice > maxManualICFTPriceDeviationBps) {
+                revert ManualPriceDeviationExceeded(normalizedPrice, currentPrice, maxManualICFTPriceDeviationBps);
+            }
+        }
+
         manualICFTPrice = price;
         manualICFTPriceDecimals = decimals_;
 
-        emit ICFTPriceUpdated(price, decimals_, normalizePrice(price, decimals_));
+        emit ICFTPriceUpdated(price, decimals_, normalizedPrice);
     }
 
     function _getChainlinkPrice(AggregatorV3Interface feed) internal view returns (uint256 normalizedPrice) {

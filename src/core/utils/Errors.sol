@@ -74,6 +74,9 @@ error StaleOraclePrice();
 /// @notice Thrown when a Chainlink feed reports an update timestamp in the future.
 error FutureOracleTimestamp();
 
+/// @notice Thrown when a governance-set manual ICFT price moves farther than its configured guardrail.
+error ManualPriceDeviationExceeded(uint256 requestedPrice, uint256 currentPrice, uint256 maxDeviationBps);
+
 /// @notice Thrown when a price feed uses unsupported decimals.
 error UnsupportedPriceDecimals();
 
@@ -122,6 +125,9 @@ error InsufficientLiquidity();
 /// @notice Thrown when borrowing would push utilization above the configured cap.
 error BorrowingDisabledAtUtilization();
 
+/// @notice Thrown when the Safe has paused new borrows while preserving repayments and liquidations.
+error BorrowingPaused();
+
 /// @notice Thrown when a single borrow exceeds the configured live-liquidity circuit-breaker limit.
 error BorrowAmountExceedsTransactionCap(uint256 requestedICFT, uint256 maxAllowedICFT);
 
@@ -133,6 +139,9 @@ error LiquidityWithdrawalWindowLimitExceeded(uint256 requestedICFT, uint256 rema
 
 /// @notice Thrown when an operation requires outstanding debt but none exists.
 error NoDebt();
+
+/// @notice Thrown when an optional settlement module has already been bound to the pool.
+error USDTSettlementAlreadyConfigured();
 
 /// @notice Thrown when a repayment rounds down to zero effective debt reduction.
 error NothingToRepay();

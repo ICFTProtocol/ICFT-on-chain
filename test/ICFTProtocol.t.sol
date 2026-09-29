@@ -18,6 +18,7 @@ import {
     BorrowExceedsLTV,
     BorrowWindowLimitExceeded,
     BorrowingDisabledAtUtilization,
+    BorrowingPaused,
     DirectETHTransfersDisabled,
     InsufficientCollateral,
     InsufficientLiquidity,
@@ -80,6 +81,34 @@ contract ICFTProtocolTest is ProtocolFixture {
         assertEq(lendingPool.totalBorrowedICFT(), 0);
         assertEq(lendingPool.fundALiquidityICFT(), FUND_A - 50 ether);
         assertEq(lendingPool.protocolRevenueICFT(), 0);
+    }
+
+    function testBorrowOnlyPauseDoesNotUseTheFullPoolPause() public {
+        lendingPool.initializeBorrowPauseV7();
+        lendingPool.setBorrowingPaused(true);
+
+        vm.prank(alice);
+        lendingPool.depositCollateral{value: 1 ether}();
+        vm.prank(alice);
+        vm.expectRevert(BorrowingPaused.selector);
+        lendingPool.borrow(100 ether);
+
+        assertFalse(lendingPool.paused());
+    }
+
+    function testDisabledCollateralCanBeWithdrawnWithoutOracleWhenDebtIsZero() public {
+        vm.startPrank(alice);
+        wsteth.approve(address(lendingPool), 1 ether);
+        lendingPool.depositCollateral(address(wsteth), 1 ether);
+        vm.stopPrank();
+
+        lendingPool.setCollateralAsset(address(wsteth), false);
+        oracle.setCollateralAssetFeed(address(wsteth), address(wstethFeed), 18, false);
+
+        vm.prank(alice);
+        lendingPool.withdrawCollateral(address(wsteth), 1 ether);
+
+        assertEq(lendingPool.getCollateralBalance(alice, address(wsteth)), 0);
     }
 
     function testHigherICFTPriceIssuesFewerTokensForTheSameUsdCreditCapacity() public {

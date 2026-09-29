@@ -9,7 +9,8 @@ import {
     CollateralPriceBoundsNotConfigured,
     CollateralPriceOutOfBounds,
     IncompleteOracleRound,
-    FutureOracleTimestamp
+    FutureOracleTimestamp,
+    ManualPriceDeviationExceeded
 } from "../src/core/utils/Errors.sol";
 
 contract PriceOracleTest is ProtocolFixture {
@@ -45,6 +46,16 @@ contract PriceOracleTest is ProtocolFixture {
     function testManualIcftPriceRejectsZero() public {
         vm.expectRevert();
         oracle.setManualICFTPrice(0, 8);
+    }
+
+    function testManualIcftPriceGuardRejectsLargeDeviationAfterV7Initialization() public {
+        oracle.initializeManualPriceGuardV7();
+
+        vm.expectRevert(abi.encodeWithSelector(ManualPriceDeviationExceeded.selector, 2e18, 1e18, 500));
+        oracle.setManualICFTPrice(2e8, 8);
+
+        oracle.setManualICFTPrice(105_000_000, 8);
+        assertEq(oracle.getICFTUSDPrice(), 1.05e18);
     }
 
     function testUnauthorizedManualIcftPriceUpdateReverts() public {
