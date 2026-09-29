@@ -227,6 +227,8 @@ contract LendingPool is
     uint256 public maxBorrowPerWindowBps;
     uint256 public borrowWindowDuration;
     uint256 public borrowWindowStart;
+    // Tracks net principal still drawn from Fund A during the window. Returning
+    // ICFT principal restores this capacity, preventing borrow-repay griefing.
     uint256 public borrowedInCurrentWindow;
     // V6 circuit breakers are based on the live available-liquidity snapshot,
     // rather than the historical Fund A allocation.
@@ -507,6 +509,7 @@ contract LendingPool is
         _reduceDebt(position, totalDebtUSD, repaidDebtUSD, repaidPrincipalUSD, msg.sender);
 
         _applyReturnedFunds(returnedPrincipalICFT, returnedRevenueICFT);
+        _releaseBorrowWindow(returnedPrincipalICFT);
 
         _emitFundAAccountingUpdate();
         emit Repay(msg.sender, actualICFT, repaidDebtUSD, getDebt(msg.sender));
@@ -584,6 +587,7 @@ contract LendingPool is
         _decreaseCollateral(user, position, collateralAsset, settlement.collateralToSeizeAmount);
 
         _applyReturnedFunds(debtSettlement.returnedPrincipalICFT, debtSettlement.returnedRevenueICFT);
+        _releaseBorrowWindow(debtSettlement.returnedPrincipalICFT);
         _writeOffBadDebtIfNeeded(user, position);
 
         _emitFundAAccountingUpdate();
@@ -1184,6 +1188,17 @@ contract LendingPool is
         if (amountICFT > remaining) revert BorrowWindowLimitExceeded(amountICFT, remaining);
 
         borrowedInCurrentWindow += amountICFT;
+    }
+
+    /// @dev Repayments only restore capacity when they return actual ICFT principal to Fund A.
+    function _releaseBorrowWindow(uint256 returnedPrincipalICFT) internal {
+        if (returnedPrincipalICFT == 0 || block.timestamp >= borrowWindowStart + borrowWindowDuration) {
+            return;
+        }
+
+        borrowedInCurrentWindow = returnedPrincipalICFT >= borrowedInCurrentWindow
+            ? 0
+            : borrowedInCurrentWindow - returnedPrincipalICFT;
     }
 
     function _consumeLiquidityWithdrawalWindow(uint256 amountICFT) internal {

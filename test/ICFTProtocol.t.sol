@@ -407,6 +407,29 @@ contract ICFTProtocolTest is ProtocolFixture {
         lendingPool.borrow(draw);
     }
 
+    function testBorrowWindowTracksNetPrincipalOutflowAfterRepay() public {
+        lendingPool.setMaxBorrowPerTransactionBps(10_000);
+        uint256 draw = (lendingPool.getAvailableLiquidity() * 500) / 10_000;
+
+        vm.deal(alice, 10_000 ether);
+        vm.startPrank(alice);
+        lendingPool.depositCollateral{value: 10_000 ether}();
+        lendingPool.borrow(draw);
+        icft.approve(address(lendingPool), draw);
+        lendingPool.repay(draw);
+        vm.stopPrank();
+
+        assertEq(lendingPool.borrowedInCurrentWindow(), 0);
+
+        vm.deal(bob, 10_000 ether);
+        vm.startPrank(bob);
+        lendingPool.depositCollateral{value: 10_000 ether}();
+        lendingPool.borrow(draw);
+        vm.stopPrank();
+
+        assertEq(lendingPool.borrowedInCurrentWindow(), draw);
+    }
+
     function testLiquidityWithdrawalWindowRejectsExitAboveFivePercentLiquiditySnapshot() public {
         lendingPool.grantRole(lendingPool.LP_VAULT_ROLE(), liquidity);
 
