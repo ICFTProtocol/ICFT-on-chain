@@ -28,6 +28,8 @@ contract HandoverProtocolGovernance is Script {
     bytes32 internal constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
     bytes32 internal constant ENGINE_ADMIN_ROLE = keccak256("ENGINE_ADMIN_ROLE");
     uint256 internal constant MINIMUM_DELAY = 1 days;
+    uint256 internal constant MINIMUM_SANDBOX_DELAY = 5 minutes;
+    uint256 internal constant SEPOLIA_CHAIN_ID = 11_155_111;
 
     struct Config {
         address currentAdmin;
@@ -87,7 +89,7 @@ contract HandoverProtocolGovernance is Script {
     function _validatePreconditions(Config memory config) private view {
         require(config.safe.code.length != 0, "Safe is not deployed");
         require(config.timelock.code.length != 0, "Timelock is not deployed");
-        require(ITimelockDelay(config.timelock).getMinDelay() >= MINIMUM_DELAY, "timelock delay below 24 hours");
+        _validateTimelockDelay(ITimelockDelay(config.timelock).getMinDelay());
 
         _requireAdmin(config.priceOracle, config.currentAdmin);
         _requireAdmin(config.interestRateModel, config.currentAdmin);
@@ -144,5 +146,14 @@ contract HandoverProtocolGovernance is Script {
         require(access.hasRole(role, config.timelock), "timelock missing config role");
         require(!access.hasRole(DEFAULT_ADMIN_ROLE, config.currentAdmin), "old default admin remains");
         require(!access.hasRole(role, config.currentAdmin), "old config admin remains");
+    }
+
+    /// @dev Keeps the production handover at 24h while enabling an explicit Sepolia-only sandbox path.
+    function _validateTimelockDelay(uint256 delay) private view {
+        if (delay >= MINIMUM_DELAY) return;
+
+        require(vm.envOr("ALLOW_SHORT_TESTNET_TIMELOCK", false), "short delay flag missing");
+        require(block.chainid == SEPOLIA_CHAIN_ID, "short delay only on Sepolia");
+        require(delay >= MINIMUM_SANDBOX_DELAY, "sandbox delay below 5 minutes");
     }
 }

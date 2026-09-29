@@ -15,6 +15,8 @@ interface ISafeOwners {
 ///      after the deployed timelock has been independently verified on-chain.
 contract DeployProtocolTimelock is Script {
     uint256 internal constant MINIMUM_DELAY = 1 days;
+    uint256 internal constant MINIMUM_SANDBOX_DELAY = 5 minutes;
+    uint256 internal constant SEPOLIA_CHAIN_ID = 11_155_111;
 
     function run() external returns (TimelockController timelock) {
         uint256 deployerPrivateKey = vm.envUint("TIMELOCK_DEPLOYER_PRIVATE_KEY");
@@ -22,7 +24,7 @@ contract DeployProtocolTimelock is Script {
         uint256 delay = vm.envOr("TIMELOCK_MIN_DELAY", MINIMUM_DELAY);
 
         _validateSafe(safe);
-        require(delay >= MINIMUM_DELAY, "timelock delay below 24 hours");
+        _validateDelay(delay);
 
         address[] memory proposers = new address[](1);
         address[] memory executors = new address[](1);
@@ -56,6 +58,15 @@ contract DeployProtocolTimelock is Script {
         require(_contains(owners, vm.envAddress("SAFE_OWNER_1")), "Safe owner 1 missing");
         require(_contains(owners, vm.envAddress("SAFE_OWNER_2")), "Safe owner 2 missing");
         require(_contains(owners, vm.envAddress("SAFE_OWNER_3")), "Safe owner 3 missing");
+    }
+
+    /// @dev Short delays are permitted only for an explicitly marked Sepolia sandbox.
+    function _validateDelay(uint256 delay) private view {
+        if (delay >= MINIMUM_DELAY) return;
+
+        require(vm.envOr("ALLOW_SHORT_TESTNET_TIMELOCK", false), "short delay flag missing");
+        require(block.chainid == SEPOLIA_CHAIN_ID, "short delay only on Sepolia");
+        require(delay >= MINIMUM_SANDBOX_DELAY, "sandbox delay below 5 minutes");
     }
 
     function _contains(address[] memory owners, address owner) private pure returns (bool) {
