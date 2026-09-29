@@ -127,6 +127,27 @@ contract LiquidationAndUpgradeabilityTest is ProtocolFixture {
         assertEq(liquidationEngine.previewResultingLtv(alice), lendingPool.getLTV(alice));
     }
 
+    function testLiquidationRemainsAvailableBelowBorrowPriceFloor() public {
+        vm.startPrank(alice);
+        lendingPool.depositCollateral{value: 1 ether}();
+        lendingPool.borrow(1_500 ether);
+        vm.stopPrank();
+
+        // The normal valuation path rejects this price because it is below the
+        // configured collateral floor. Liquidation must still be able to use it.
+        ethFeed.setRoundData(400e8, block.timestamp);
+
+        ILiquidationEngine.LiquidationPreview memory preview = liquidationEngine.previewLiquidation(alice, NATIVE_ASSET);
+
+        assertTrue(preview.isLiquidatable);
+        assertGt(preview.requiredIcft, 0);
+
+        vm.prank(liquidator);
+        liquidationEngine.executeLiquidation(alice, NATIVE_ASSET, preview.requiredIcft, payable(liquidator));
+
+        assertLt(lendingPool.getDebt(alice), 1_500 ether);
+    }
+
     function testRecoverNativeRevertsForUnauthorizedCaller() public {
         vm.deal(address(liquidationEngine), 1 ether);
 

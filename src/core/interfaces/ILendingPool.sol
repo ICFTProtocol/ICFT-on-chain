@@ -311,6 +311,8 @@ interface ILendingPool {
      */
     function getCollateralValueUSD(address user) external view returns (uint256 collateralValueUSD);
 
+    function getCollateralValueForLiquidationUSD(address user) external view returns (uint256 collateralValueUSD);
+
     /**
      * @notice Returns whether the user is liquidatable at current prices.
      * @param user Borrower address.

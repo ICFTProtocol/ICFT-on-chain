@@ -91,6 +91,8 @@ interface IPriceOracle {
      */
     function getAssetUSDPrice(address asset) external view returns (uint256);
 
+    function getAssetUSDPriceForLiquidation(address asset) external view returns (uint256);
+
     /**
      * @notice Returns the decimals used by a supported collateral asset.
      * @param asset Collateral asset address, or zero address for native ETH.
@@ -157,6 +159,11 @@ interface IPriceOracle {
      */
     function convertAssetToUSD(address asset, uint256 assetAmount) external view returns (uint256 usdAmount);
 
+    function convertAssetToUSDForLiquidation(address asset, uint256 assetAmount)
+        external
+        view
+        returns (uint256 usdAmount);
+
     /**
      * @notice Converts a protocol USD accounting amount into collateral-asset units.
      * @param asset Collateral asset address, or zero address for native ETH.
@@ -165,4 +172,9 @@ interface IPriceOracle {
      * @return assetAmount Equivalent asset amount using the asset's own decimals.
      */
     function convertUSDToAsset(address asset, uint256 usdAmount, bool roundUp) external view returns (uint256 assetAmount);
+
+    function convertUSDToAssetForLiquidation(address asset, uint256 usdAmount, bool roundUp)
+        external
+        view
+        returns (uint256 assetAmount);
 }

@@ -208,6 +208,19 @@ contract PriceOracle is Initializable, IPriceOracle, AccessControlUpgradeable {
         return price;
     }
 
+    /// @notice Uses fresh Chainlink data and only caps the upside for liquidation math.
+    /// @dev A crash below a normal borrowing floor must not freeze liquidations.
+    function getAssetUSDPriceForLiquidation(address asset) public view returns (uint256) {
+        AggregatorV3Interface feed = asset == address(0) ? ethUsdFeed : collateralFeeds[asset].feed;
+        if (asset != address(0) && !collateralFeeds[asset].enabled) revert UnsupportedCollateralAsset();
+
+        CollateralPriceBounds memory bounds = collateralPriceBounds[asset];
+        if (!bounds.configured) revert CollateralPriceBoundsNotConfigured(asset);
+
+        uint256 price = _getChainlinkPrice(feed);
+        return price > bounds.maxPriceUSD ? bounds.maxPriceUSD : price;
+    }
+
     function getAssetDecimals(address asset) public view returns (uint8 decimals) {
         if (asset == address(0)) {
             return 18;
@@ -272,12 +285,30 @@ contract PriceOracle is Initializable, IPriceOracle, AccessControlUpgradeable {
         return _convertTokenToUSD(normalizedAmount, getAssetUSDPrice(asset));
     }
 
+    function convertAssetToUSDForLiquidation(address asset, uint256 assetAmount)
+        external
+        view
+        returns (uint256 usdAmount)
+    {
+        uint256 normalizedAmount = _normalizeTokenAmount(assetAmount, getAssetDecimals(asset));
+        return _convertTokenToUSD(normalizedAmount, getAssetUSDPriceForLiquidation(asset));
+    }
+
     function convertUSDToAsset(address asset, uint256 usdAmount, bool roundUp)
         external
         view
         returns (uint256 assetAmount)
     {
         uint256 normalizedAmount = _convertUSDToToken(usdAmount, getAssetUSDPrice(asset), roundUp);
+        return _denormalizeTokenAmount(normalizedAmount, getAssetDecimals(asset), roundUp);
+    }
+
+    function convertUSDToAssetForLiquidation(address asset, uint256 usdAmount, bool roundUp)
+        external
+        view
+        returns (uint256 assetAmount)
+    {
+        uint256 normalizedAmount = _convertUSDToToken(usdAmount, getAssetUSDPriceForLiquidation(asset), roundUp);
         return _denormalizeTokenAmount(normalizedAmount, getAssetDecimals(asset), roundUp);
     }
 

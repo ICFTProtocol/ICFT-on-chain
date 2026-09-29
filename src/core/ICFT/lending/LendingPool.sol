@@ -565,7 +565,7 @@ contract LendingPool is
         uint256 totalDebtUSD = _syncPosition(position, user);
         if (totalDebtUSD == 0) revert NoDebt();
 
-        uint256 totalCollateralValueUSD = _getCollateralValueUSD(user, position);
+        uint256 totalCollateralValueUSD = _getCollateralValueUSDForLiquidation(user, position);
         if (!riskEngine.isLiquidatable(totalCollateralValueUSD, totalDebtUSD)) revert NotLiquidatable();
 
         LiquidationSettlement memory settlement =
@@ -798,6 +798,10 @@ contract LendingPool is
         return _getCollateralValueUSD(user, positions[user]);
     }
 
+    function getCollateralValueForLiquidationUSD(address user) external view returns (uint256 collateralValueUSD) {
+        return _getCollateralValueUSDForLiquidation(user, positions[user]);
+    }
+
     function getCurrentInterest(address user) external view returns (uint256 accruedInterestUSD) {
         Position memory position = positions[user];
         uint256 totalDebtUSD = _debtFromScaled(position.scaledDebtUSD, _previewBorrowIndex());
@@ -820,7 +824,7 @@ contract LendingPool is
 
     function isLiquidatable(address user) external view returns (bool) {
         return riskEngine.isLiquidatable(
-            _getCollateralValueUSD(user, positions[user]),
+            _getCollateralValueUSDForLiquidation(user, positions[user]),
             _debtFromScaled(positions[user].scaledDebtUSD, _previewBorrowIndex())
         );
     }
@@ -987,11 +991,12 @@ contract LendingPool is
             return settlement;
         }
 
-        uint256 assetValueUSD = riskEngine.getCollateralValueUSD(collateralAsset, collateralBalance);
+        if (!collateralAssets[collateralAsset].enabled) revert UnsupportedCollateralAsset();
+        uint256 assetValueUSD = priceOracle.convertAssetToUSDForLiquidation(collateralAsset, collateralBalance);
         uint256 desiredSeizedValueUSD =
             outcome.collateralValueSeizedUSD < assetValueUSD ? outcome.collateralValueSeizedUSD : assetValueUSD;
 
-        uint256 seizeAmount = priceOracle.convertUSDToAsset(collateralAsset, desiredSeizedValueUSD, false);
+        uint256 seizeAmount = priceOracle.convertUSDToAssetForLiquidation(collateralAsset, desiredSeizedValueUSD, false);
         if (seizeAmount == 0 && desiredSeizedValueUSD > 0) {
             seizeAmount = 1;
         }
@@ -999,7 +1004,7 @@ contract LendingPool is
             seizeAmount = collateralBalance;
         }
 
-        uint256 actualSeizedValueUSD = riskEngine.getCollateralValueUSD(collateralAsset, seizeAmount);
+        uint256 actualSeizedValueUSD = priceOracle.convertAssetToUSDForLiquidation(collateralAsset, seizeAmount);
         if (actualSeizedValueUSD > assetValueUSD) {
             actualSeizedValueUSD = assetValueUSD;
         }
@@ -1064,6 +1069,23 @@ contract LendingPool is
             }
 
             collateralValueUSD += riskEngine.getCollateralValueUSD(asset, balance);
+        }
+    }
+
+    function _getCollateralValueUSDForLiquidation(address user, Position memory position)
+        internal
+        view
+        returns (uint256 collateralValueUSD)
+    {
+        uint256 assetsLength = supportedCollateralAssets.length;
+        for (uint256 i = 0; i < assetsLength; ++i) {
+            address asset = supportedCollateralAssets[i];
+            if (!collateralAssets[asset].enabled) continue;
+
+            uint256 balance = _getCollateralBalanceMemory(user, position, asset);
+            if (balance == 0) continue;
+
+            collateralValueUSD += priceOracle.convertAssetToUSDForLiquidation(asset, balance);
         }
     }
 

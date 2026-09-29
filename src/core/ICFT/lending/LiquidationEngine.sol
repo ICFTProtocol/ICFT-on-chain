@@ -201,7 +201,7 @@ contract LiquidationEngine is Initializable, ILiquidationEngine, AccessControlUp
             return preview;
         }
 
-        uint256 totalCollateralValueUsd = lendingPool.getCollateralValueUSD(user);
+        uint256 totalCollateralValueUsd = lendingPool.getCollateralValueForLiquidationUSD(user);
         IRiskEngine.LiquidationOutcome memory genericOutcome =
             IRiskEngine(lendingPool.riskEngine()).calculateLiquidation(totalCollateralValueUsd, debtUsd);
 
@@ -210,11 +210,11 @@ contract LiquidationEngine is Initializable, ILiquidationEngine, AccessControlUp
         }
 
         uint256 assetValueUsd =
-            IRiskEngine(lendingPool.riskEngine()).getCollateralValueUSD(collateralAsset, collateralBalance);
+            IPriceOracle(lendingPool.priceOracle()).convertAssetToUSDForLiquidation(collateralAsset, collateralBalance);
         uint256 desiredSeizedValueUsd =
             genericOutcome.collateralValueSeizedUSD < assetValueUsd ? genericOutcome.collateralValueSeizedUSD : assetValueUsd;
         uint256 seizeAmount =
-            IPriceOracle(lendingPool.priceOracle()).convertUSDToAsset(collateralAsset, desiredSeizedValueUsd, false);
+            IPriceOracle(lendingPool.priceOracle()).convertUSDToAssetForLiquidation(collateralAsset, desiredSeizedValueUsd, false);
 
         if (seizeAmount == 0 && desiredSeizedValueUsd > 0) {
             seizeAmount = 1;
@@ -224,7 +224,7 @@ contract LiquidationEngine is Initializable, ILiquidationEngine, AccessControlUp
         }
 
         uint256 actualSeizedValueUsd =
-            IRiskEngine(lendingPool.riskEngine()).getCollateralValueUSD(collateralAsset, seizeAmount);
+            IPriceOracle(lendingPool.priceOracle()).convertAssetToUSDForLiquidation(collateralAsset, seizeAmount);
         uint256 repaidUsd =
             (actualSeizedValueUsd * 10_000) / (10_000 + IRiskEngine(lendingPool.riskEngine()).getLiquidationBonusBps());
         uint256 remainingDebtUsd = debtUsd > repaidUsd ? debtUsd - repaidUsd : 0;
