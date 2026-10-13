@@ -50,6 +50,27 @@ contract LiquidityVaultAndBadDebtTest is ProtocolFixture {
         assertEq(lendingPool.fundALiquidityICFT(), FUND_A + assets);
     }
 
+    function testDirectIcftTransferDoesNotInflateLpAssetsOrShareMinting() public {
+        uint256 unsolicitedAmount = 1_000 ether;
+        uint256 assetsBefore = vault.totalAssets();
+        uint256 poolBalanceBefore = icft.balanceOf(address(lendingPool));
+
+        vm.prank(alice);
+        icft.transfer(address(lendingPool), unsolicitedAmount);
+
+        assertEq(icft.balanceOf(address(lendingPool)), poolBalanceBefore + unsolicitedAmount);
+        assertEq(lendingPool.fundALiquidityICFT(), FUND_A);
+        assertEq(vault.totalAssets(), assetsBefore);
+
+        vm.startPrank(alice);
+        icft.approve(address(vault), unsolicitedAmount);
+        uint256 shares = vault.supply(unsolicitedAmount, alice);
+        vm.stopPrank();
+
+        assertEq(shares, unsolicitedAmount);
+        assertEq(vault.totalAssets(), assetsBefore + unsolicitedAmount);
+    }
+
     function testInterestIsSplitBetweenLpAssetsAndInsuranceReserve() public {
         vm.startPrank(bob);
         lendingPool.depositCollateral{value: 1 ether}();

@@ -87,6 +87,12 @@ interface ILendingPool {
     event CollateralAssetUpdated(address indexed asset, bool enabled, bool isNative);
 
     /**
+     * @notice Emitted when an empty, disabled ERC20 collateral asset is removed from the registry.
+     * @param asset ERC20 collateral asset removed from the pool registry.
+     */
+    event CollateralAssetRemoved(address indexed asset);
+
+    /**
      * @notice Emitted when a user borrows ICFT.
      * @param user Borrower whose debt was increased.
      * @param amountICFT ICFT amount transferred to the borrower.
@@ -174,6 +180,12 @@ interface ILendingPool {
      * @param amount Token amount using the token's own decimals.
      */
     function withdrawCollateral(address asset, uint256 amount) external;
+
+    /**
+     * @notice Removes an ERC20 asset from the collateral registry after it has been disabled and fully withdrawn.
+     * @param asset ERC20 collateral asset to remove. Native ETH cannot be removed.
+     */
+    function removeCollateralAsset(address asset) external;
 
     /**
      * @notice Emitted when interest is accrued onto a position.
