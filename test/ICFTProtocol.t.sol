@@ -11,6 +11,7 @@ import {LendingPool} from "../src/core/ICFT/lending/LendingPool.sol";
 import {LiquidationEngine} from "../src/core/ICFT/lending/LiquidationEngine.sol";
 import {RiskEngine} from "../src/core/ICFT/risk/RiskEngine.sol";
 import {IInterestRateModel} from "../src/core/interfaces/IInterestRateModel.sol";
+import {ILendingPool} from "../src/core/interfaces/ILendingPool.sol";
 import {MockChainlinkFeed} from "../src/mocks/MockChainlinkFeed.sol";
 import {FeeOnTransferMockERC20} from "../src/mocks/FeeOnTransferMockERC20.sol";
 import {
@@ -18,6 +19,8 @@ import {
     BorrowExceedsLTV,
     BorrowWindowLimitExceeded,
     BorrowingDisabledAtUtilization,
+    CollateralAssetBalanceNotZero,
+    CollateralAssetMustBeDisabled,
     DirectETHTransfersDisabled,
     InsufficientCollateral,
     InsufficientLiquidity,
@@ -172,6 +175,19 @@ contract ICFTProtocolTest is ProtocolFixture {
         assertEq(lendingPool.getLTV(alice), 0);
     }
 
+    function testDebtFreeWithdrawalDoesNotRequireAFreshOraclePrice() public {
+        vm.prank(alice);
+        lendingPool.depositCollateral{value: 1 ether}();
+
+        oracle.setMaxPriceAge(1);
+        vm.warp(block.timestamp + 2);
+
+        vm.prank(alice);
+        lendingPool.withdrawCollateral(1 ether);
+
+        assertEq(lendingPool.getCollateralBalance(alice, NATIVE_ASSET), 0);
+    }
+
     function testWbtcCollateralCanBeDepositedAndValued() public {
         uint256 depositAmount = 2 * 10 ** wbtc.decimals();
 
@@ -190,6 +206,35 @@ contract ICFTProtocolTest is ProtocolFixture {
 
         assertEq(lendingPool.getCollateralBalance(alice, address(wsteth)), depositAmount);
         assertEq(lendingPool.getCollateralValueUSD(alice), 11_000e18);
+    }
+
+    function testCollateralAssetCannotBeRemovedUntilDisabledAndEmpty() public {
+        vm.prank(alice);
+        lendingPool.depositCollateral(address(wsteth), 1 ether);
+
+        vm.expectRevert(abi.encodeWithSelector(CollateralAssetMustBeDisabled.selector, address(wsteth)));
+        lendingPool.removeCollateralAsset(address(wsteth));
+
+        lendingPool.setCollateralAsset(address(wsteth), false);
+        vm.expectRevert(abi.encodeWithSelector(CollateralAssetBalanceNotZero.selector, address(wsteth), 1 ether));
+        lendingPool.removeCollateralAsset(address(wsteth));
+    }
+
+    function testEmptyDisabledCollateralAssetCanBeRemovedAndReadded() public {
+        vm.prank(alice);
+        lendingPool.depositCollateral(address(wsteth), 1 ether);
+
+        lendingPool.setCollateralAsset(address(wsteth), false);
+        vm.prank(alice);
+        lendingPool.withdrawCollateral(address(wsteth), 1 ether);
+
+        lendingPool.removeCollateralAsset(address(wsteth));
+        ILendingPool.CollateralAsset memory removed = lendingPool.getCollateralAsset(address(wsteth));
+        assertFalse(removed.enabled);
+        assertFalse(removed.isNative);
+
+        lendingPool.setCollateralAsset(address(wsteth), true);
+        assertTrue(lendingPool.getCollateralAsset(address(wsteth)).enabled);
     }
 
     function testBasketCollateralSupportsBorrowingAcrossEthAndWbtc() public {
@@ -481,6 +526,34 @@ contract ICFTProtocolTest is ProtocolFixture {
 
         vm.expectRevert(BorrowExceedsLTV.selector);
         lendingPool.withdrawCollateral(0.4 ether);
+        vm.stopPrank();
+    }
+
+    function testBorrowRejectsOneWeiAboveExactLtvLimit() public {
+        vm.prank(alice);
+        lendingPool.depositCollateral{value: 1 ether}();
+
+        uint256 collateralValueUSD = lendingPool.getCollateralValueUSD(alice);
+        uint256 maxBorrowUSD = riskEngine.getMaxBorrowUSD(collateralValueUSD);
+        assertEq(maxBorrowUSD, 1_600 ether);
+
+        vm.prank(alice);
+        vm.expectRevert(BorrowExceedsLTV.selector);
+        lendingPool.borrow(maxBorrowUSD + 1);
+    }
+
+    function testWithdrawUsesExactLtvLimit() public {
+        vm.startPrank(alice);
+        lendingPool.depositCollateral{value: 1 ether}();
+        lendingPool.borrow(1_200 ether);
+        lendingPool.withdrawCollateral(0.25 ether);
+        vm.stopPrank();
+
+        vm.startPrank(bob);
+        lendingPool.depositCollateral{value: 1 ether}();
+        lendingPool.borrow(1_200 ether);
+        vm.expectRevert(BorrowExceedsLTV.selector);
+        lendingPool.withdrawCollateral(0.25 ether + 1);
         vm.stopPrank();
     }
 

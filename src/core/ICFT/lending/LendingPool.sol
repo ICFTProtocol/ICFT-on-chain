@@ -109,7 +109,9 @@ import {
     BorrowBelowMinimum,
     BorrowingDisabledAtUtilization,
     LiquidityWithdrawalWindowLimitExceeded,
+    CollateralAssetBalanceNotZero,
     CollateralAssetLimitReached,
+    CollateralAssetMustBeDisabled,
     DirectETHTransfersDisabled,
     InsufficientCollateral,
     InsufficientLiquidity,
@@ -434,8 +436,7 @@ contract LendingPool is
         if (addedDebtUSD < minimumBorrowUSD) revert BorrowBelowMinimum();
         uint256 newDebtUSD = currentDebtUSD + addedDebtUSD;
         uint256 collateralValueUSD = _getCollateralValueUSD(msg.sender, position);
-        uint256 newLtv = riskEngine.calculateLTV(collateralValueUSD, newDebtUSD);
-        if (newLtv > riskEngine.getMaxLTVBps()) revert BorrowExceedsLTV();
+        if (newDebtUSD > riskEngine.getMaxBorrowUSD(collateralValueUSD)) revert BorrowExceedsLTV();
 
         uint256 scaledIncrease = _toScaledDebtRoundUp(addedDebtUSD, borrowIndex);
         position.principalDebtUSD += addedDebtUSD;
@@ -711,6 +712,31 @@ contract LendingPool is
         _setCollateralAsset(asset, enabled, asset == NATIVE_ASSET);
     }
 
+    /// @notice Removes an ERC20 collateral asset after a decommissioning period.
+    /// @dev Disabling keeps existing balances withdrawable. Removal is allowed only after the pool holds none.
+    function removeCollateralAsset(address asset) external onlyRole(CONFIG_ADMIN_ROLE) {
+        if (asset == NATIVE_ASSET || !collateralAssetKnown[asset]) revert UnsupportedCollateralAsset();
+        if (collateralAssets[asset].enabled) revert CollateralAssetMustBeDisabled(asset);
+
+        uint256 poolBalance = IERC20(asset).balanceOf(address(this));
+        if (poolBalance != 0) revert CollateralAssetBalanceNotZero(asset, poolBalance);
+
+        uint256 assetsLength = supportedCollateralAssets.length;
+        for (uint256 i = 0; i < assetsLength; ++i) {
+            if (supportedCollateralAssets[i] != asset) continue;
+
+            uint256 lastIndex = assetsLength - 1;
+            if (i != lastIndex) supportedCollateralAssets[i] = supportedCollateralAssets[lastIndex];
+            supportedCollateralAssets.pop();
+            delete collateralAssets[asset];
+            collateralAssetKnown[asset] = false;
+            emit CollateralAssetRemoved(asset);
+            return;
+        }
+
+        revert UnsupportedCollateralAsset();
+    }
+
     function accrueInterest() external {
         _accrueGlobalInterest();
     }
@@ -806,13 +832,12 @@ contract LendingPool is
     }
 
     /// @notice Returns the ICFT value owned by LP shares.
-    /// @dev Reserve ICFT is excluded because it is earmarked for bad-debt coverage before LP losses are socialized.
+    /// @dev Uses protocol accounting rather than the raw token balance, so unsolicited transfers cannot inflate LP shares.
     function getLPTotalAssets() public view returns (uint256 totalAssetsICFT) {
-        uint256 idleAssetsICFT = getSpendablePrincipalBalance();
         uint256 outstandingDebtICFT =
             priceOracle.convertUSDToICFT(_debtFromScaled(totalScaledDebtUSD, _previewBorrowIndex()), false);
 
-        return idleAssetsICFT + outstandingDebtICFT;
+        return fundALiquidityICFT + outstandingDebtICFT;
     }
 
     function getSpendablePrincipalBalance() public view returns (uint256 spendablePrincipalICFT) {
@@ -829,14 +854,14 @@ contract LendingPool is
         uint256 currentBalance = _getCollateralBalanceStorage(user, position, asset);
         if (amount > currentBalance) revert InsufficientCollateral();
 
-        uint256 currentCollateralValueUSD = _getCollateralValueUSD(user, position);
-        uint256 withdrawnValueUSD = riskEngine.getCollateralValueUSD(asset, amount);
-        uint256 remainingCollateralValueUSD =
-            currentCollateralValueUSD > withdrawnValueUSD ? currentCollateralValueUSD - withdrawnValueUSD : 0;
-
         if (currentDebtUSD > 0) {
-            uint256 resultingLtv = riskEngine.calculateLTV(remainingCollateralValueUSD, currentDebtUSD);
-            if (resultingLtv > riskEngine.getMaxLTVBps()) revert BorrowExceedsLTV();
+            uint256 currentCollateralValueUSD = _getCollateralValueUSD(user, position);
+            uint256 withdrawnValueUSD = riskEngine.getCollateralValueUSD(asset, amount);
+            uint256 remainingCollateralValueUSD =
+                currentCollateralValueUSD > withdrawnValueUSD ? currentCollateralValueUSD - withdrawnValueUSD : 0;
+            if (currentDebtUSD > riskEngine.getMaxBorrowUSD(remainingCollateralValueUSD)) {
+                revert BorrowExceedsLTV();
+            }
         }
 
         _decreaseCollateral(user, position, asset, amount);

@@ -56,6 +56,12 @@ error MigrationRequiresZeroDebt();
 /// @notice Thrown when the collateral registry reaches its bounded asset capacity.
 error CollateralAssetLimitReached();
 
+/// @notice Thrown when governance attempts to remove an asset that still accepts new collateral.
+error CollateralAssetMustBeDisabled(address asset);
+
+/// @notice Thrown when governance attempts to remove an asset with collateral still held by the pool.
+error CollateralAssetBalanceNotZero(address asset, uint256 poolBalance);
+
 /// @notice Thrown when fixed token allocations do not add up to the expected total supply.
 error InvalidTokenAllocation();
 
